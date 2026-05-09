@@ -561,7 +561,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${pullRequestsOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
           onClick={() => setPullRequestsOpen(!pullRequestsOpen)}
         >
-          Pull requests
+          {t(($) => $.detail.section_pull_requests)}
           <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${pullRequestsOpen ? "rotate-90" : ""}`} />
         </button>
         {pullRequestsOpen && <div className="pl-2"><PullRequestList issueId={id} /></div>}

@@ -11,6 +11,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { githubInstallationsOptions, githubKeys } from "@multica/core/github/queries";
 import { api } from "@multica/core/api";
+import { useT } from "../../i18n";
 
 // lucide-react v1.x dropped brand marks (including Github). Render an inline
 // SVG of the official GitHub octocat mark so the card is still recognizable.
@@ -23,6 +24,7 @@ function GitHubMark({ className }: { className?: string }) {
 }
 
 export function IntegrationsTab() {
+  const { t } = useT("settings");
   const wsId = useWorkspaceId();
   const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
@@ -47,12 +49,12 @@ export function IntegrationsTab() {
     try {
       const resp = await api.getGitHubConnectURL(wsId);
       if (!resp.configured || !resp.url) {
-        toast.error("GitHub integration is not configured for this deployment");
+        toast.error(t(($) => $.integrations.toast_not_configured));
         return;
       }
       window.open(resp.url, "_blank", "noopener");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to open GitHub install");
+      toast.error(e instanceof Error ? e.message : t(($) => $.integrations.toast_open_failed));
     } finally {
       setConnecting(false);
     }
@@ -62,16 +64,16 @@ export function IntegrationsTab() {
     try {
       await api.deleteGitHubInstallation(wsId, installationDbId);
       qc.invalidateQueries({ queryKey: githubKeys.installations(wsId) });
-      toast.success("Disconnected GitHub account");
+      toast.success(t(($) => $.integrations.toast_disconnected));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to disconnect");
+      toast.error(e instanceof Error ? e.message : t(($) => $.integrations.toast_disconnect_failed));
     }
   }
 
   return (
     <div className="space-y-8">
       <section className="space-y-4">
-        <h2 className="text-sm font-semibold">Integrations</h2>
+        <h2 className="text-sm font-semibold">{t(($) => $.integrations.section_title)}</h2>
 
         <Card>
           <CardContent className="space-y-4">
@@ -79,11 +81,14 @@ export function IntegrationsTab() {
               <div className="flex items-start gap-3">
                 <GitHubMark className="h-6 w-6 mt-0.5 shrink-0" />
                 <div className="space-y-1">
-                  <p className="text-sm font-medium">GitHub</p>
+                  <p className="text-sm font-medium">{t(($) => $.integrations.github_title)}</p>
                   <p className="text-xs text-muted-foreground">
-                    Link issues to pull requests automatically. When a PR with{" "}
-                    <code className="rounded bg-muted px-1 py-0.5 text-[10px]">MUL-123</code>{" "}
-                    in its branch, title, or body is merged, the corresponding issue moves to <strong>Done</strong>.
+                    {t(($) => $.integrations.github_description_prefix)}{" "}
+                    <code className="rounded bg-muted px-1 py-0.5 text-[10px]">
+                      {t(($) => $.integrations.github_identifier_example)}
+                    </code>{" "}
+                    {t(($) => $.integrations.github_description_suffix)}{" "}
+                    <strong>{t(($) => $.integrations.github_description_done)}</strong>.
                   </p>
                 </div>
               </div>
@@ -92,28 +97,30 @@ export function IntegrationsTab() {
                   size="sm"
                   onClick={handleConnect}
                   disabled={connecting || !configured}
-                  title={!configured ? "GitHub App is not configured on this server" : undefined}
+                  title={!configured ? t(($) => $.integrations.connect_disabled_tooltip) : undefined}
                 >
-                  {connecting ? "Opening…" : "Connect GitHub"}
+                  {connecting
+                    ? t(($) => $.integrations.connect_opening)
+                    : t(($) => $.integrations.connect_github)}
                 </Button>
               )}
             </div>
 
             {canManage && !configured && (
               <p className="text-xs text-muted-foreground">
-                GitHub integration is not configured for this deployment. Operators must set{" "}
+                {t(($) => $.integrations.not_configured)}{" "}
                 <code className="rounded bg-muted px-1 py-0.5 text-[10px]">GITHUB_APP_SLUG</code>{" "}
-                and{" "}
+                {t(($) => $.integrations.not_configured_and)}{" "}
                 <code className="rounded bg-muted px-1 py-0.5 text-[10px]">GITHUB_WEBHOOK_SECRET</code>.
               </p>
             )}
 
             {canManage && configured && (
               <div className="space-y-2">
-                {isLoading && <p className="text-xs text-muted-foreground">Loading…</p>}
+                {isLoading && <p className="text-xs text-muted-foreground">{t(($) => $.integrations.loading)}</p>}
                 {!isLoading && installations.length === 0 && (
                   <p className="text-xs text-muted-foreground">
-                    No GitHub accounts connected yet.
+                    {t(($) => $.integrations.empty)}
                   </p>
                 )}
                 {installations.map((inst) => (
@@ -132,10 +139,12 @@ export function IntegrationsTab() {
                       <div className="min-w-0">
                         <p className="text-sm font-medium truncate">{inst.account_login}</p>
                         <p className="text-xs text-muted-foreground">
-                          {inst.account_type} · connected{" "}
-                          {new Date(inst.created_at).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
+                          {t(($) => $.integrations.connected_at, {
+                            type: inst.account_type,
+                            date: new Date(inst.created_at).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                            }),
                           })}
                         </p>
                       </div>
@@ -157,7 +166,7 @@ export function IntegrationsTab() {
 
             {!canManage && (
               <p className="text-xs text-muted-foreground">
-                Only admins and owners can manage integrations.
+                {t(($) => $.integrations.manage_hint)}
               </p>
             )}
           </CardContent>
