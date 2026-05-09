@@ -297,17 +297,13 @@ func (b *kiroBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		finalOutput := output.String()
 		outputMu.Unlock()
 
-		// If we sniffed a provider-level error on stderr, promote the
-		// status to failed regardless of whether the agent stream also
-		// surfaced the error as text. The sniffer's regex is specific
-		// enough (HTTP 4xx markers, named error types) that we trust
-		// it as a definitive signal that the upstream call failed.
-		if finalStatus == "completed" {
-			if msg := providerErr.message(); msg != "" {
-				finalStatus = "failed"
-				finalError = msg
-			}
-		}
+		// Promote completed→failed when stderr or the agent text
+		// stream show a terminal upstream-LLM failure (HTTP 4xx /
+		// rate-limit / expired token). See the helper docs for the
+		// full signal set; the key safety property is that transient
+		// per-attempt warnings followed by a successful retry stay
+		// "completed".
+		finalStatus, finalError = promoteACPResultOnProviderError(finalStatus, finalError, finalOutput, providerErr)
 
 		c.usageMu.Lock()
 		u := c.usage

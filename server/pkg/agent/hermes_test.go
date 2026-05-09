@@ -1007,6 +1007,60 @@ done
 `
 }
 
+// TestHermesProviderErrorSnifferTerminalVsTransient verifies the
+// sniffer reports terminalMessage()=="" for a per-attempt warning
+// that did NOT escalate to an exhausted/non-retryable failure, but
+// still returns the same string from message() so callers wanting
+// diagnostic text can use it. This is what prevents the
+// promote-on-any-sniff false positive (a transient `attempt 1/3`
+// followed by a successful retry must stay "completed").
+func TestHermesProviderErrorSnifferTerminalVsTransient(t *testing.T) {
+	t.Parallel()
+
+	// Transient: the sniffer DID see something matching acpErrorHeaderRe
+	// (so `message()` is non-empty for diagnostic purposes), but the
+	// signal is just "attempt 1/3 against a retryable rate limit" — no
+	// terminal markers at all.
+	s := newACPProviderErrorSniffer("hermes")
+	s.Write([]byte("⚠️  API call failed (attempt 1/3): retryable upstream blip\n"))
+	if msg := s.message(); msg == "" {
+		t.Fatalf("sniffer should still capture transient warnings for diagnostics")
+	}
+	if msg := s.terminalMessage(); msg != "" {
+		t.Fatalf("transient attempt should NOT be a terminal failure, got %q", msg)
+	}
+
+	// Now feed a follow-on terminal marker. terminalMessage must turn on.
+	s.Write([]byte("❌  API call failed after 3 retries: usage limit reached\n"))
+	if msg := s.terminalMessage(); msg == "" {
+		t.Fatalf("after-N-retries / ❌ should switch terminalMessage on")
+	}
+}
+
+// TestHermesProviderErrorSnifferTerminalNonRetryable verifies that a
+// non-retryable error (BadRequest / Authentication / Non-retryable)
+// is treated as terminal even on attempt 1/3 — those errors don't
+// retry, so the very first failure is the final disposition. Also
+// covers ❌ / [ERROR] / "after N retries" markers that adapters
+// emit on give-up.
+func TestHermesProviderErrorSnifferTerminalNonRetryable(t *testing.T) {
+	t.Parallel()
+
+	for _, line := range []string{
+		`⚠️  API call failed (attempt 1/3): BadRequestError [HTTP 400]`,
+		`⚠️  API call failed (attempt 1/3): AuthenticationError [HTTP 401]`,
+		`⚠️  API call failed (HTTP 400) attempt a: Non-retryable error`,
+		`❌ API call failed after 3 retries: RateLimitError [HTTP 429]`,
+		`[ERROR] API call failed: upstream returned HTTP 500`,
+	} {
+		s := newACPProviderErrorSniffer("hermes")
+		s.Write([]byte(line + "\n"))
+		if msg := s.terminalMessage(); msg == "" {
+			t.Errorf("expected %q to be classified as terminal", line)
+		}
+	}
+}
+
 // TestHermesBackendPromotesProviderErrorWithNonEmptyOutput pins the
 // fix for GitHub multica#1952: a hermes run that hits a 429 (or any
 // upstream provider error) must surface as Status=failed even though
@@ -1051,6 +1105,85 @@ func TestHermesBackendPromotesProviderErrorWithNonEmptyOutput(t *testing.T) {
 		}
 		if result.SessionID != "ses_429" {
 			t.Errorf("expected session id to be preserved on failure, got %q", result.SessionID)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for result")
+	}
+}
+
+// fakeHermesACPTransientRetryScript emits a single retryable per-
+// attempt warning to stderr and then completes with a normal agent
+// text turn — the situation where the upstream LLM blipped on
+// attempt 1/3 but a subsequent attempt succeeded and produced a
+// real answer. The previous (too-broad) promotion logic would have
+// flipped this to status=failed; the fix must keep it as completed.
+func fakeHermesACPTransientRetryScript() string {
+	return `#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{}}}\n' "$id"
+      ;;
+    *'"method":"session/new"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"ses_ok"}}\n' "$id"
+      ;;
+    *'"method":"session/prompt"'*)
+      # Per-attempt rate-limit warning that hermes routinely logs on
+      # transient blips — the request DOES retry and succeed below.
+      printf '%s\n' '⚠️  API call failed (attempt 1/3): RateLimitError [HTTP 429]' >&2
+      # Real agent answer streamed back as a normal text turn.
+      printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_ok","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Here is the answer you asked for."}}}}\n'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$id"
+      exit 0
+      ;;
+  esac
+done
+`
+}
+
+// TestHermesBackendDoesNotPromoteOnTransientRetry pins the
+// regression GPT-Boy flagged on the multica#1952 fix: a per-attempt
+// ⚠️ warning on stderr that does NOT include any terminal marker
+// ("after N retries", Non-retryable, ❌, [ERROR], BadRequest /
+// Authentication errors) and is followed by a successful agent
+// turn must stay status=completed. The previous "any sniffer line
+// → fail" rule would have wrongly marked this run as failed.
+func TestHermesBackendDoesNotPromoteOnTransientRetry(t *testing.T) {
+	t.Parallel()
+
+	fakePath := filepath.Join(t.TempDir(), "hermes")
+	writeTestExecutable(t, fakePath, []byte(fakeHermesACPTransientRetryScript()))
+
+	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("new hermes backend: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{
+		Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+
+	select {
+	case result, ok := <-session.Result:
+		if !ok {
+			t.Fatal("result channel closed without a value")
+		}
+		if result.Status != "completed" {
+			t.Fatalf("transient retry that ultimately succeeded must stay status=completed, got %q (error=%q output=%q)", result.Status, result.Error, result.Output)
+		}
+		if !strings.Contains(result.Output, "Here is the answer") {
+			t.Errorf("expected the successful agent turn to be in output, got %q", result.Output)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for result")

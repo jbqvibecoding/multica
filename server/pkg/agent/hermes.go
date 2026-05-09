@@ -312,22 +312,15 @@ func (b *hermesBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		finalOutput := output.String()
 		outputMu.Unlock()
 
-		// If we sniffed a provider-level error on stderr (typically
-		// HTTP 4xx from the configured LLM endpoint, including 429
-		// rate-limit / no-credit), promote the status to failed and
-		// surface the real reason. Hermes reports stopReason=end_turn
-		// even when the upstream call ultimately fails, and depending
-		// on the adapter the error may also leak into the agent text
-		// stream (a synthetic "API call failed after N retries..."
-		// turn) — so the output buffer is not always empty. We trust
-		// the sniffer's regex (specific error-type tags + HTTP status
-		// markers) and promote regardless of whether output is empty.
-		if finalStatus == "completed" {
-			if msg := providerErr.message(); msg != "" {
-				finalStatus = "failed"
-				finalError = msg
-			}
-		}
+		// Hermes reports stopReason=end_turn even when the upstream
+		// LLM call ultimately fails (HTTP 429 rate-limit, expired
+		// token, ...). promoteACPResultOnProviderError flips the
+		// status to "failed" when either the stderr sniffer saw a
+		// *terminal* failure marker (not just a transient per-attempt
+		// warning), the agent text stream contains the synthetic
+		// "API call failed after N retries..." turn the adapter
+		// injects on give-up, or there's no output to fall back on.
+		finalStatus, finalError = promoteACPResultOnProviderError(finalStatus, finalError, finalOutput, providerErr)
 
 		// Build usage map.
 		c.usageMu.Lock()
@@ -1197,12 +1190,23 @@ func hermesToolNameFromTitle(title string, kind string) string {
 // Parameterised by provider name so both hermes and kimi can share
 // the transport: the regexes match format-level signals (HTTP status,
 // error-kind tags, "API call failed" banner) that both runtimes emit.
+//
+// The sniffer distinguishes *transient* per-attempt warnings (e.g.
+// "API call failed (attempt 1/3): RateLimitError [HTTP 429]" — followed
+// by a successful retry) from *terminal* exhausted failures (e.g.
+// "API call failed after 3 retries: ..." or "❌ ... Non-retryable"):
+// `message()` returns whichever was last seen, while `terminalMessage()`
+// returns non-empty only when a terminal-failure marker was matched.
+// Promotion to status="failed" must use `terminalMessage()`, otherwise
+// a successful retry following an early per-attempt warning would be
+// wrongly marked as failed.
 type acpProviderErrorSniffer struct {
 	provider string
 	mu       sync.Mutex
 	remains  []byte   // buffer for a partial trailing line across writes
 	lines    []string // captured error lines, bounded
 	seen     map[string]bool
+	terminal bool // sticky: at least one line matched acpTerminalErrorRe
 }
 
 // acpErrorHeaderRe matches the first line of an API-error block.
@@ -1214,6 +1218,22 @@ var acpErrorHeaderRe = regexp.MustCompile(`(?:⚠️|❌|\[ERROR\]).*(?:BadReque
 // the subsequent lines of the error block (the one whose "Error:" or
 // "Details:" tag actually spells out what happened).
 var acpErrorDetailRe = regexp.MustCompile(`(?:Error:|detail:|Details:)\s*(.+)`)
+
+// acpTerminalErrorRe matches markers that only appear when the
+// adapter has *given up* on the upstream call — either after
+// exhausting retries ("after N retries"), or because the error is
+// classified as non-retryable up front (Non-retryable, BadRequest /
+// Authentication errors, ❌ / [ERROR] log levels). Per-attempt
+// warnings ("(attempt 1/3)") deliberately do NOT match this pattern.
+var acpTerminalErrorRe = regexp.MustCompile(`(?:❌|\[ERROR\]|after \d+ retr|Non-retryable|BadRequestError|AuthenticationError)`)
+
+// acpAgentOutputTerminalRe matches the synthetic agent-text turn that
+// hermes-style ACP adapters inject when they exhaust retries against
+// the upstream LLM ("API call failed after 3 retries: HTTP 429..."),
+// surfaced via session/update agent_message_chunk and ending up in the
+// final output buffer. Per-attempt warnings (which only go to stderr
+// and use "(attempt N/M)" phrasing) won't match.
+var acpAgentOutputTerminalRe = regexp.MustCompile(`API call failed after \d+ retr(?:y|ies)`)
 
 const acpMaxErrorLines = 8
 
@@ -1250,6 +1270,9 @@ func (s *acpProviderErrorSniffer) Write(p []byte) (int, error) {
 		if !(acpErrorHeaderRe.MatchString(line) || acpErrorDetailRe.MatchString(line)) {
 			continue
 		}
+		if acpTerminalErrorRe.MatchString(line) {
+			s.terminal = true
+		}
 		if s.seen[line] {
 			continue
 		}
@@ -1266,10 +1289,37 @@ func (s *acpProviderErrorSniffer) Write(p []byte) (int, error) {
 // error field. Prefers the most specific "Error:" / "detail:"
 // fragment; falls back to the first captured header line; empty
 // when nothing useful was seen.
+//
+// NOTE: a non-empty message() can describe a *transient* per-attempt
+// warning that was followed by a successful retry. Code that flips
+// task status to "failed" must instead use terminalMessage() — see
+// the type doc above.
 func (s *acpProviderErrorSniffer) message() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.messageLocked()
+}
+
+// terminalMessage returns the same single-line summary as message()
+// but only when the sniffer has seen at least one line matching
+// acpTerminalErrorRe — i.e. the adapter has given up retrying. This
+// is the signal callers should use to decide whether to promote a
+// run from "completed" to "failed". Returns empty if all captured
+// lines look like transient retry warnings.
+func (s *acpProviderErrorSniffer) terminalMessage() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.terminal {
+		return ""
+	}
+	return s.messageLocked()
+}
+
+// messageLocked is the lock-held implementation shared by message()
+// and terminalMessage(). Caller must hold s.mu.
+func (s *acpProviderErrorSniffer) messageLocked() string {
 	prefix := s.provider + " provider error: "
 	for _, line := range s.lines {
 		if m := acpErrorDetailRe.FindStringSubmatch(line); m != nil {
@@ -1285,4 +1335,40 @@ func (s *acpProviderErrorSniffer) message() string {
 		}
 	}
 	return ""
+}
+
+// promoteACPResultOnProviderError flips finalStatus to "failed" if
+// either (a) the stderr sniffer captured a terminal-failure marker,
+// (b) the adapter injected a synthetic "API call failed after N
+// retries..." turn into the agent text stream, or (c) output was
+// empty AND the sniffer captured anything at all (no real result to
+// fall back on, even from a transient-only sequence). Returns the
+// updated (status, error) pair; callers should overwrite their
+// locals with the result.
+//
+// This is the shared post-processing step for hermes/kimi/kiro.
+// Without it, runs that exhaust retries against the upstream LLM
+// (HTTP 429, expired token, …) silently report as "completed"
+// because session/prompt still ends with stopReason=end_turn — see
+// GitHub multica#1952.
+func promoteACPResultOnProviderError(finalStatus, finalError, finalOutput string, sniffer *acpProviderErrorSniffer) (string, string) {
+	if finalStatus != "completed" {
+		return finalStatus, finalError
+	}
+	if msg := sniffer.terminalMessage(); msg != "" {
+		return "failed", msg
+	}
+	if acpAgentOutputTerminalRe.MatchString(finalOutput) {
+		msg := sniffer.message()
+		if msg == "" {
+			msg = sniffer.provider + " provider error: " + acpAgentOutputTerminalRe.FindString(finalOutput)
+		}
+		return "failed", msg
+	}
+	if finalOutput == "" {
+		if msg := sniffer.message(); msg != "" {
+			return "failed", msg
+		}
+	}
+	return finalStatus, finalError
 }
