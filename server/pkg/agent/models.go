@@ -198,14 +198,32 @@ func cursorStaticModels() []Model {
 	}
 }
 
-// copilotStaticModels — GitHub Copilot CLI resolves models via the
-// user's GitHub account, not via CLI args. We deliberately mark no
-// Default: the right model is whatever GitHub routes the request
-// to, and forcing one here would override that.
+// copilotStaticModels — GitHub Copilot CLI does not expose a model
+// list subcommand; the actual catalog is keyed off the user's
+// GitHub account / plan. We mirror the IDs accepted by `copilot
+// --model <id>` (dotted form, e.g. `gpt-5.4`, `claude-sonnet-4.6`)
+// so the dropdown matches what the CLI actually validates. No
+// Default is set: the right model is whatever GitHub routes to,
+// and forcing one here would override that.
+//
+// Source: https://docs.github.com/en/copilot/reference/ai-models/supported-models
+// Keep this list in sync with the Copilot CLI release notes.
 func copilotStaticModels() []Model {
 	return []Model{
+		// OpenAI
+		{ID: "gpt-5.5", Label: "GPT-5.5", Provider: "openai"},
 		{ID: "gpt-5.4", Label: "GPT-5.4", Provider: "openai"},
-		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "anthropic"},
+		{ID: "gpt-5.4-mini", Label: "GPT-5.4 mini", Provider: "openai"},
+		{ID: "gpt-5.3-codex", Label: "GPT-5.3-Codex", Provider: "openai"},
+		{ID: "gpt-5.2-codex", Label: "GPT-5.2-Codex", Provider: "openai"},
+		{ID: "gpt-5.2", Label: "GPT-5.2", Provider: "openai"},
+		{ID: "gpt-5-mini", Label: "GPT-5 mini", Provider: "openai"},
+		{ID: "gpt-4.1", Label: "GPT-4.1", Provider: "openai"},
+		// Anthropic
+		{ID: "claude-opus-4.7", Label: "Claude Opus 4.7", Provider: "anthropic"},
+		{ID: "claude-sonnet-4.6", Label: "Claude Sonnet 4.6", Provider: "anthropic"},
+		{ID: "claude-sonnet-4.5", Label: "Claude Sonnet 4.5", Provider: "anthropic"},
+		{ID: "claude-haiku-4.5", Label: "Claude Haiku 4.5", Provider: "anthropic"},
 	}
 }
 

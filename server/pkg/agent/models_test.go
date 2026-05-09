@@ -96,6 +96,49 @@ func TestCodexStaticModelsExposesGPT55(t *testing.T) {
 	}
 }
 
+func TestCopilotStaticModelsExposesFullCatalog(t *testing.T) {
+	// GitHub Copilot CLI has no `models list` subcommand, so the
+	// catalog is hand-maintained from the official supported-models
+	// docs. Regression guard for multica-ai/multica#1948 — the
+	// dropdown previously shipped only 2 models and used dashed IDs
+	// (`claude-sonnet-4-6`) which the CLI rejects. IDs must use the
+	// dotted form (`claude-sonnet-4.6`) that `copilot --model <id>`
+	// actually accepts, and cover both OpenAI and Anthropic families.
+	models := copilotStaticModels()
+	ids := map[string]Model{}
+	for _, m := range models {
+		ids[m.ID] = m
+	}
+	for _, want := range []string{
+		"gpt-5.5", "gpt-5.4", "gpt-5.4-mini",
+		"gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.2",
+		"gpt-5-mini", "gpt-4.1",
+		"claude-opus-4.7", "claude-sonnet-4.6",
+		"claude-sonnet-4.5", "claude-haiku-4.5",
+	} {
+		if _, ok := ids[want]; !ok {
+			t.Errorf("missing expected Copilot model %q in: %+v", want, models)
+		}
+	}
+	// Dashed legacy IDs must not reappear — `copilot --model
+	// claude-sonnet-4-6` errors with "Model ... is not available".
+	for _, banned := range []string{"claude-sonnet-4-6", "claude-sonnet-4-5"} {
+		if _, ok := ids[banned]; ok {
+			t.Errorf("Copilot catalog must not use dashed model id %q; use dotted form", banned)
+		}
+	}
+	for _, m := range models {
+		switch m.Provider {
+		case "openai", "anthropic":
+		default:
+			t.Errorf("Copilot entry %q has unexpected Provider %q", m.ID, m.Provider)
+		}
+		if m.Default {
+			t.Errorf("Copilot entries should not set Default; account routing decides. got %+v", m)
+		}
+	}
+}
+
 func TestListModelsHermesWithoutBinary(t *testing.T) {
 	// With no `hermes` binary on PATH the discovery fast-paths to
 	// an empty list (the UI then falls back to creatable manual
