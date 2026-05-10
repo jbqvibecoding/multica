@@ -38,10 +38,17 @@ export function OfflineBanner({ agentName, availability }: Props) {
   }
   return (
     <div className="px-5 mb-1.5">
-      <div className="mx-auto flex w-full max-w-4xl items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs bg-muted text-muted-foreground ring-1 ring-border">
+      <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-md px-2.5 py-1.5 text-xs bg-muted text-muted-foreground ring-1 ring-border">
         <WifiOff className="size-3.5 shrink-0" />
         <span className="truncate">
           {t(($) => $.offline_banner.offline, { name })}
+        </span>
+        <span className="ml-auto truncate">
+          {t(($) => $.offline_banner.diagnose_hint_prefix)}
+          <code className="rounded bg-background/60 px-1 py-0.5 font-mono text-[10px]">
+            multica daemon logs -f
+          </code>
+          {t(($) => $.offline_banner.diagnose_hint_suffix)}
         </span>
       </div>
     </div>

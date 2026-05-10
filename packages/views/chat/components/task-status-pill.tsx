@@ -26,9 +26,18 @@ type StageKey =
   | "offline"
   | "reconnecting"
   | "queued"
+  | "stuck"
   | "starting_up"
   | "thinking"
   | "typing";
+
+// After this many seconds with the task still queued/dispatched and the
+// runtime appearing online, we treat the wait as genuinely stuck. The
+// backend's runtime-sweep gap (~150s after a daemon dies before
+// runtime.status flips to offline) means a task can spend its whole life
+// "queued · online" while the daemon is actually dead — the user should
+// see a diagnostic cue well before that 150s window expires.
+const STUCK_THRESHOLD_SECS = 30;
 
 type ToolKey =
   | "running_command"
@@ -56,10 +65,11 @@ const TOOL_KEY_BY_SLUG: Record<string, Exclude<ToolKey, "fallback">> = {
 // Pure stage decision returning translation keys. The hook below maps these
 // keys into localized labels — keeping the decision pure makes it easy to
 // follow the priority rules without translation noise.
-function pickStageKeys(
+export function pickStageKeys(
   status: string | undefined,
   taskMessages: readonly TaskMessagePayload[],
   availability: AgentAvailability | undefined,
+  elapsedSecs: number,
 ): { stageKey: StageKey; toolKey?: ToolKey; static?: boolean } {
   if (
     (status === "queued" || status === "dispatched") &&
@@ -72,6 +82,18 @@ function pickStageKeys(
     availability === "unstable"
   ) {
     return { stageKey: "reconnecting" };
+  }
+  // Queued / dispatched too long while the runtime still appears online.
+  // The backend-reported "online" status lags up to the runtime-sweeper's
+  // ~150s window, so this state legitimately means "daemon is heartbeating
+  // (or recently was) but isn't picking up the task". A static label flagged
+  // as stuck gives the user something to act on instead of an unbounded
+  // "queued · 90s · 120s · …" timer.
+  if (
+    (status === "queued" || status === "dispatched") &&
+    elapsedSecs >= STUCK_THRESHOLD_SECS
+  ) {
+    return { stageKey: "stuck", static: true };
   }
   if (status === "queued") return { stageKey: "queued" };
   if (status === "dispatched") return { stageKey: "starting_up" };
@@ -103,10 +125,11 @@ function useResolveStage(): (
   status: string | undefined,
   taskMessages: readonly TaskMessagePayload[],
   availability: AgentAvailability | undefined,
+  elapsedSecs: number,
 ) => Stage {
   const { t } = useT("chat");
-  return (status, taskMessages, availability) => {
-    const decision = pickStageKeys(status, taskMessages, availability);
+  return (status, taskMessages, availability, elapsedSecs) => {
+    const decision = pickStageKeys(status, taskMessages, availability, elapsedSecs);
     if (decision.toolKey) {
       return {
         label: t(($) => $.status_pill.tools[decision.toolKey!]),
@@ -151,7 +174,7 @@ export function TaskStatusPill({
   // running; we trust that observation over a stale cache.
   const status = taskMessages.length > 0 ? "running" : pendingTask.status;
   const elapsedSecs = Math.max(0, Math.floor((now - anchor) / 1000));
-  const stage = resolveStage(status, taskMessages, availability);
+  const stage = resolveStage(status, taskMessages, availability, elapsedSecs);
 
   return (
     <div

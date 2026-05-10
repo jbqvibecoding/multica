@@ -88,13 +88,16 @@
   "offline_banner": {
     "fallback_name": "智能体",
     "unstable": "{{name}} 的连接不稳定——回复可能延迟。",
-    "offline": "{{name}} 离线——你的消息将在它上线后发送。"
+    "offline": "{{name}} 离线——你的消息将在它上线后发送。",
+    "diagnose_hint_prefix": "本地 daemon 没起来？运行 ",
+    "diagnose_hint_suffix": " 排查。"
   },
   "status_pill": {
     "stages": {
-      "offline": "离线",
+      "offline": "Runtime 离线",
       "reconnecting": "重连中",
       "queued": "排队中",
+      "stuck": "Daemon 无响应",
       "starting_up": "启动中",
       "thinking": "思考中",
       "typing": "输入中"

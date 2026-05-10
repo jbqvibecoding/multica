@@ -92,13 +92,16 @@
   "offline_banner": {
     "fallback_name": "the agent",
     "unstable": "{{name}}'s connection is unstable — replies may be delayed.",
-    "offline": "{{name}} is offline — your message will be delivered when they're back."
+    "offline": "{{name}} is offline — your message will be delivered when they're back.",
+    "diagnose_hint_prefix": "Local daemon down? Run ",
+    "diagnose_hint_suffix": " to check."
   },
   "status_pill": {
     "stages": {
-      "offline": "Offline",
+      "offline": "Runtime offline",
       "reconnecting": "Reconnecting",
       "queued": "Queued",
+      "stuck": "Daemon not responding",
       "starting_up": "Starting up",
       "thinking": "Thinking",
       "typing": "Typing"
