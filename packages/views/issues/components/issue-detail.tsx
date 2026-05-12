@@ -668,108 +668,196 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
   const loading = issueLoading;
 
-  // Scroll to highlighted comment once the timeline (and target index) are
-  // ready. Under virtualization the entry is not in the DOM until Virtuoso
-  // mounts it, so we ask Virtuoso to scroll the index instead of querying the
-  // DOM. `initialTopMostItemIndex` on <Virtuoso> handles the rough landing;
-  // this is the precision pass that runs after ResizeObserver has measured
-  // real heights and can correct any drift from the estimated landing.
+  // Deep-link scroll to a specific comment. Virtualized lists are
+  // fundamentally racy here: the library estimates the target's offset from
+  // an item-size table that hasn't measured the target yet, scrolls there,
+  // mounts the item, ResizeObserver fires, and the library emits a
+  // scrollTop correction. Any manual scroll positioning we do *during* that
+  // mount→measure→correct window gets overwritten by the correction pass.
   //
-  // Double rAF: Virtuoso #883 — initialTopMostItemIndex / scrollToIndex are
-  // racy if applied before the first ResizeObserver pass updates scrollHeight.
-  // One rAF waits for mount, the nested rAF waits for measurement.
-  // Highlight flash bumped 2s→3s to outlast mount latency on cold cards.
+  // The pattern that lands deterministically is virtualizer-agnostic:
+  //   Phase 1 (coarse): tell Virtuoso to scroll to the index. Only used to
+  //     get the target item *mounted* into the DOM — we do NOT trust the
+  //     final scroll position it produces.
+  //   Phase 2 (settle): wait until the target node exists AND its measured
+  //     height has been stable for two consecutive ResizeObserver ticks.
+  //     That stability is the signal that markdown render / code-highlight
+  //     have finished reflowing the card.
+  //   Phase 3 (precise): call the browser's native scrollIntoView on the
+  //     real node. The browser reads getBoundingClientRect from the
+  //     measured DOM, so this is the one positioning the virtualizer cannot
+  //     un-do via a follow-up correction.
+  //   Phase 4 (highlight): light the highlight ring after `scrollend` (or
+  //     a short fallback timeout). Doing this earlier flashes a ring on a
+  //     row that's about to be repositioned.
+  //
+  // CSS partner of this effect: `overflow-anchor: none` on the scroll
+  // container (see the wrapper div below). Without it the browser's own
+  // scroll-anchoring kicks in whenever the virtualizer resizes items above
+  // our target and silently nudges scrollTop, mid-deep-link.
   useEffect(() => {
     if (!highlightCommentId || items.length === 0 || targetIdx < 0) return;
+    if (!scrollContainerEl) return;
     if (didHighlightRef.current === highlightCommentId) return;
 
-    // Strategy: Virtuoso's scrollToIndex is asynchronous — it queues an
-    // internal state change that mounts the target a few frames later. The
-    // target also isn't in the DOM until Virtuoso settles. So:
-    //   1. Kick off Virtuoso to start moving toward the target
-    //   2. Poll for the target's DOM element (max ~20 frames ≈ 320ms)
-    //   3. Once found, use the browser's scrollIntoView which correctly
-    //      accounts for all sibling content above the list
-    //   4. After Virtuoso fully settles, scrollIntoView one more time —
-    //      Virtuoso may have overwritten our scroll position
-    const rafIds: number[] = [];
+    const targetCommentId = highlightCommentId;
+    const container = scrollContainerEl;
+    let cancelled = false;
+    let done = false;
+    let mutationObserver: MutationObserver | null = null;
+    let resizeObserver: ResizeObserver | null = null;
     const timeoutIds: number[] = [];
-    const cancelled = { value: false };
+    const rafIds: number[] = [];
+    let scrollEndListener: ((this: HTMLElement, ev: Event) => void) | null = null;
 
-    const findTarget = () => {
-      // First try the exact id — works for root comments and for replies
-      // whose enclosing thread is currently expanded.
-      const direct = scrollContainerEl?.querySelector(
-        `[data-comment-id="${CSS.escape(highlightCommentId)}"]`,
+    const findTarget = (): HTMLElement | null => {
+      const direct = container.querySelector(
+        `[data-comment-id="${CSS.escape(targetCommentId)}"]`,
       ) as HTMLElement | null;
       if (direct) return direct;
-      // Reply in a collapsed thread: fall back to the root wrapper so we at
-      // least scroll the card containing the target into view.
-      const rootId = replyToRoot.get(highlightCommentId);
-      if (rootId) {
-        return scrollContainerEl?.querySelector(
-          `[data-comment-id="${CSS.escape(rootId)}"]`,
-        ) as HTMLElement | null;
-      }
-      return null;
+      const rootId = replyToRoot.get(targetCommentId);
+      if (!rootId) return null;
+      return container.querySelector(
+        `[data-comment-id="${CSS.escape(rootId)}"]`,
+      ) as HTMLElement | null;
     };
 
-    const performScroll = () => {
+    const finish = (didScroll: boolean) => {
+      if (done) return;
+      done = true;
+      didHighlightRef.current = targetCommentId;
+      if (didScroll) {
+        // Light highlight after scroll settles — scrollend covers smooth
+        // scrolls and most native auto scrolls; the timeout fallback covers
+        // (a) browsers without scrollend, (b) instantaneous scrolls where
+        // the browser does not fire scrollend because scrollTop didn't
+        // actually change, and (c) jsdom (no real scroll).
+        let fired = false;
+        const lightHighlight = () => {
+          if (fired) return;
+          fired = true;
+          if (scrollEndListener) {
+            container.removeEventListener("scrollend", scrollEndListener);
+            scrollEndListener = null;
+          }
+          if (cancelled) return;
+          setHighlightedId(targetCommentId);
+          timeoutIds.push(
+            window.setTimeout(() => setHighlightedId(null), 2500),
+          );
+        };
+        scrollEndListener = lightHighlight;
+        container.addEventListener("scrollend", lightHighlight, { once: true });
+        timeoutIds.push(window.setTimeout(lightHighlight, 200));
+      } else {
+        // No scroll happened (target never appeared). Still flash so a
+        // manual scroll lands on a highlighted card.
+        setHighlightedId(targetCommentId);
+        timeoutIds.push(
+          window.setTimeout(() => setHighlightedId(null), 2500),
+        );
+      }
+    };
+
+    const performFinalScroll = (target: HTMLElement) => {
+      if (cancelled || done) return;
+      target.scrollIntoView({ block: "center", behavior: "auto" });
+      finish(true);
+    };
+
+    // Wait for the target node to stop reflowing. "Settle by silence":
+    // every ResizeObserver tick resets a short idle window; when the
+    // window elapses with no further ticks, we treat the card as stable
+    // (markdown render, lowlight code highlight, etc. have all quieted).
+    // This degrades cleanly when RO is absent or stubbed (test envs):
+    // the baseline timer still fires and we proceed.
+    const startSettleObserve = (target: HTMLElement) => {
+      let settleTimerId: number | null = null;
+      const armSettle = (delayMs: number) => {
+        if (settleTimerId !== null) clearTimeout(settleTimerId);
+        const id = window.setTimeout(() => {
+          if (cancelled || done) return;
+          if (resizeObserver) {
+            resizeObserver.disconnect();
+            resizeObserver = null;
+          }
+          performFinalScroll(target);
+        }, delayMs);
+        settleTimerId = id;
+        timeoutIds.push(id);
+      };
+      if (typeof ResizeObserver === "undefined") {
+        armSettle(0);
+        return;
+      }
+      resizeObserver = new ResizeObserver(() => {
+        if (cancelled || done) return;
+        armSettle(120);
+      });
+      resizeObserver.observe(target);
+      // Baseline: if RO never fires (target already stable, or stubbed in
+      // tests), still settle after a short wait. Real browsers always fire
+      // RO at least once after observe(), so this is mostly a safety net.
+      armSettle(150);
+    };
+
+    const tryAdoptTarget = (): boolean => {
       const el = findTarget();
       if (!el) return false;
-      el.scrollIntoView({ block: "center", behavior: "auto" });
+      if (mutationObserver) {
+        mutationObserver.disconnect();
+        mutationObserver = null;
+      }
+      startSettleObserve(el);
       return true;
     };
 
-    const pollMount = (attemptsLeft: number) => {
-      if (cancelled.value) return;
-      if (performScroll()) {
-        setHighlightedId(highlightCommentId);
-        didHighlightRef.current = highlightCommentId;
-        // Done. No reanchor — polling already waits until Virtuoso has
-        // settled enough to mount the target, so scrollIntoView IS the
-        // last write. Adding a delayed re-scroll would yank the user back
-        // if they scrolled away in the meantime.
-        return;
-      }
-      if (attemptsLeft <= 0) {
-        // Virtuoso didn't mount the target within ~320ms. Still set the
-        // highlight so when the user manually scrolls there, the card
-        // flashes. Mark handled so subsequent renders don't keep polling.
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[deep-link] target ${highlightCommentId} did not mount in time; highlight set without scroll`,
-        );
-        setHighlightedId(highlightCommentId);
-        didHighlightRef.current = highlightCommentId;
-        return;
-      }
-      const id = requestAnimationFrame(() => pollMount(attemptsLeft - 1));
-      rafIds.push(id);
-    };
-
-    const start = requestAnimationFrame(() => {
-      if (cancelled.value) return;
-      // Step 1: kick Virtuoso so it begins mounting target index.
-      virtuosoRef.current?.scrollToIndex({
-        index: targetIdx,
-        align: "center",
-        behavior: "auto",
-      });
-      // Step 2-4: start polling for the DOM element.
-      pollMount(20);
+    // Phase 1: kick Virtuoso to mount the target. This may overshoot or
+    // undershoot — Phase 3 will correct.
+    virtuosoRef.current?.scrollToIndex({
+      index: targetIdx,
+      align: "center",
+      behavior: "auto",
     });
-    rafIds.push(start);
 
-    const flash = window.setTimeout(() => setHighlightedId(null), 2000);
-    timeoutIds.push(flash);
+    // Phase 2: watch for the target to appear in the DOM.
+    if (!tryAdoptTarget()) {
+      mutationObserver = new MutationObserver(() => {
+        if (cancelled || done) return;
+        tryAdoptTarget();
+      });
+      mutationObserver.observe(container, {
+        childList: true,
+        subtree: true,
+      });
+    }
+
+    // Hard cap: 2.5s. If the target never appears or never stabilizes (e.g.
+    // an image inside it loads asynchronously and keeps resizing past this
+    // window), do a best-effort final scroll and flash the highlight so a
+    // manual scroll still lands on a marked card. `overflow-anchor: none`
+    // on the scroll container prevents the browser from re-anchoring after
+    // late image loads.
+    timeoutIds.push(
+      window.setTimeout(() => {
+        if (cancelled || done) return;
+        const el = findTarget();
+        if (el) performFinalScroll(el);
+        else finish(false);
+      }, 2500),
+    );
 
     return () => {
-      cancelled.value = true;
+      cancelled = true;
+      if (mutationObserver) mutationObserver.disconnect();
+      if (resizeObserver) resizeObserver.disconnect();
+      if (scrollEndListener) {
+        container.removeEventListener("scrollend", scrollEndListener);
+      }
       for (const id of rafIds) cancelAnimationFrame(id);
       for (const id of timeoutIds) clearTimeout(id);
     };
-  }, [highlightCommentId, items.length, targetIdx, scrollContainerEl]);
+  }, [highlightCommentId, items.length, targetIdx, scrollContainerEl, replyToRoot]);
 
   // Cmd-F / Ctrl-F on a virtualized timeline only searches what's mounted in
   // the viewport — off-screen comments are invisible to browser find-in-page.
@@ -1117,8 +1205,17 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           </div>
         </PageHeader>
 
-        {/* Content — scrollable */}
-        <div ref={setScrollContainerEl} className="relative flex-1 overflow-y-auto">
+        {/* Content — scrollable. `overflow-anchor: none` disables the
+            browser's built-in scroll-anchoring so that late layout shifts
+            inside the virtualized timeline (Virtuoso resizing list items
+            above the viewport, images inside comments resolving their
+            natural size, etc.) don't silently nudge scrollTop and undo
+            the deep-link scroll we just performed. */}
+        <div
+          ref={setScrollContainerEl}
+          className="relative flex-1 overflow-y-auto"
+          style={{ overflowAnchor: "none" }}
+        >
         <div className="mx-auto w-full max-w-4xl px-8 py-8">
           <TitleEditor
             key={`title-${id}`}
