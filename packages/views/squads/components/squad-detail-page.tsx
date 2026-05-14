@@ -1077,7 +1077,7 @@ function SquadMembersTab({
               actorId={m.member_id}
               size={32}
               showStatusDot
-              enableHoverCard
+              enableHoverCard={m.member_type === "agent"}
               hoverCardVariant="live"
             />
             <div className="flex-1 min-w-0">
