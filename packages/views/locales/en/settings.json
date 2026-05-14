@@ -183,6 +183,7 @@
     "saved_hint": "All changes saved",
     "empty": "No repositories yet.",
     "edit_aria": "Edit repository",
+    "cancel_aria": "Cancel edit",
     "delete_aria": "Delete repository",
     "manage_hint": "Only admins and owners can manage repositories.",
     "toast_saved": "Repositories saved",

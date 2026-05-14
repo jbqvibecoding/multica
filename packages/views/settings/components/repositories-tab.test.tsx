@@ -150,6 +150,53 @@ describe("RepositoriesTab — view/edit toggle", () => {
     expect(screen.getByRole("button", { name: /^Save$/ })).not.toBeDisabled();
   });
 
+  it("Edit clean row → Cancel returns to display mode without changing URL or dirtying Save", async () => {
+    const user = userEvent.setup();
+    render(<RepositoriesTab />, { wrapper: I18nWrapper });
+
+    await user.click(screen.getByRole("button", { name: "Edit repository" }));
+    expect(screen.getByRole("textbox")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Cancel edit" }));
+
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.getByText("https://github.com/multica-ai/multica")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Save$/ })).toBeDisabled();
+    expect(mockUpdateWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("Cancel on a dirty edited row reverts the URL and exits edit mode", async () => {
+    const user = userEvent.setup();
+    render(<RepositoriesTab />, { wrapper: I18nWrapper });
+
+    await user.click(screen.getByRole("button", { name: "Edit repository" }));
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "https://github.com/multica-ai/changed");
+    expect(screen.getByRole("button", { name: /^Save$/ })).not.toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Cancel edit" }));
+
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.getByText("https://github.com/multica-ai/multica")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Save$/ })).toBeDisabled();
+  });
+
+  it("Cancel on a newly added (never saved) row removes the row entirely", async () => {
+    const user = userEvent.setup();
+    render(<RepositoriesTab />, { wrapper: I18nWrapper });
+
+    await user.click(screen.getByRole("button", { name: /Add repository/ }));
+    expect(screen.getByRole("textbox")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Cancel edit" }));
+
+    expect(screen.queryByRole("textbox")).toBeNull();
+    // Original persisted row is still there; the new empty row is gone.
+    expect(screen.getByText("https://github.com/multica-ai/multica")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Save$/ })).toBeDisabled();
+  });
+
   it("deleting a row shifts tracked edit indices so the wrong row doesn't open", async () => {
     workspaceRef.current = {
       ...workspaceRef.current,

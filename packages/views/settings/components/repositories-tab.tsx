@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Save, Plus, Trash2, Pencil } from "lucide-react";
+import { Save, Plus, Trash2, Pencil, X } from "lucide-react";
 import { Input } from "@multica/ui/components/ui/input";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
@@ -87,6 +87,19 @@ export function RepositoriesTab() {
     setEditingIndices(new Set(editingIndices).add(index));
   };
 
+  const handleCancelEdit = (index: number) => {
+    const savedUrl = savedRepos[index]?.url;
+    if (savedUrl === undefined) {
+      // Newly added row that was never persisted — drop it entirely.
+      handleRemoveRepo(index);
+      return;
+    }
+    setRepos(repos.map((r, i) => (i === index ? { ...r, url: savedUrl } : r)));
+    const next = new Set(editingIndices);
+    next.delete(index);
+    setEditingIndices(next);
+  };
+
   if (!workspace) return null;
 
   return (
@@ -131,7 +144,13 @@ export function RepositoriesTab() {
                     </div>
                   )}
                   {canManageWorkspace && (
-                    <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+                    <div
+                      className={
+                        isEditing
+                          ? "flex shrink-0 items-center gap-0.5"
+                          : "flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+                      }
+                    >
                       {!isEditing && (
                         <Button
                           variant="ghost"
@@ -141,6 +160,17 @@ export function RepositoriesTab() {
                           onClick={() => handleEditRepo(index)}
                         >
                           <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      {isEditing && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={t(($) => $.repositories.cancel_aria)}
+                          className="text-muted-foreground hover:text-foreground"
+                          onClick={() => handleCancelEdit(index)}
+                        >
+                          <X className="h-3.5 w-3.5" />
                         </Button>
                       )}
                       <Button
