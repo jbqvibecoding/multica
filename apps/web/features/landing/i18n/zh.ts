@@ -285,13 +285,12 @@ export function createZhDict(allowSignup: boolean): LandingDict {
     },
     entries: [
       {
-        version: "0.2.33",
+        version: "0.3.0",
         date: "2026-05-14",
-        title: "Squads、Agent 模板与附件预览",
+        title: "Squads 与附件预览",
         changes: [],
         features: [
           "Squads 支持把任务交给一个小组，由 leader agent 负责协调下一步",
-          "创建 Agent 时可以从更丰富的模板库开始，覆盖工程、产品、设计、写作、沟通和效率场景，也支持纯指令模板",
           "附件可以直接预览，支持 PDF、音频、视频、Markdown、代码、日志和纯文本",
           "中文姓名支持用拼音搜索，适用于 mention、负责人、订阅人、agents、projects 和 squads",
         ],

@@ -285,13 +285,12 @@ export function createEnDict(allowSignup: boolean): LandingDict {
     },
     entries: [
       {
-        version: "0.2.33",
+        version: "0.3.0",
         date: "2026-05-14",
-        title: "Squads, Agent Templates & Attachment Previews",
+        title: "Squads & Attachment Previews",
         changes: [],
         features: [
           "Squads let teams assign work to a group, with a leader agent coordinating the next step",
-          "Create agents from a richer template gallery, including lightweight prompt-only starters for engineering, product, design, writing, communication, and productivity",
           "Attachments can be previewed in place for PDFs, audio, video, markdown, code, logs, and plain text",
           "Chinese names can be found by pinyin across mentions, assignees, subscribers, agents, projects, and squads",
         ],
