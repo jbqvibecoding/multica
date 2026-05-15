@@ -52,6 +52,7 @@ export function IssueRow({ issue, onPress, showStatus = false }: Props) {
             type={issue.assignee_type}
             id={issue.assignee_id}
             size={20}
+            showPresence
           />
         ) : null}
       </View>

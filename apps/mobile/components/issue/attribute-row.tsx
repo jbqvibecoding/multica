@@ -135,6 +135,7 @@ export function AttributeRow({ issue }: { issue: Issue }) {
               type={assigneeValue.type}
               id={assigneeValue.id}
               size={16}
+              showPresence
             />
           }
           label={assigneeName ?? "Unknown"}

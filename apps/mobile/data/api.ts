@@ -37,9 +37,11 @@ import type {
   Project,
   ProjectResource,
   Reaction,
+  RuntimeDevice,
   SearchIssuesResponse,
   SearchProjectsResponse,
   SendChatMessageResponse,
+  Squad,
   TimelineEntry,
   UpdateIssueRequest,
   UpdateProjectRequest,
@@ -75,8 +77,10 @@ import {
   EMPTY_LIST_PROJECTS_RESPONSE,
   EMPTY_MEMBER_LIST,
   EMPTY_PROJECT,
+  EMPTY_RUNTIME_LIST,
   EMPTY_SEARCH_ISSUES_RESPONSE,
   EMPTY_SEARCH_PROJECTS_RESPONSE,
+  EMPTY_SQUAD_LIST,
   EMPTY_USER,
   EMPTY_WORKSPACE_LIST,
   InboxListSchema,
@@ -85,9 +89,11 @@ import {
   ListProjectsResponseSchema,
   MemberListSchema,
   ProjectSchema,
+  RuntimeListSchema,
   SearchIssuesResponseSchema,
   SearchProjectsResponseSchema,
   SendChatMessageResponseSchema,
+  SquadListSchema,
   UserSchema,
   WorkspaceListSchema,
 } from "./schemas";
@@ -376,6 +382,43 @@ class ApiClient {
     });
     return parseWithFallback(raw, AgentListSchema, EMPTY_AGENT_LIST, {
       endpoint: "listAgents",
+    });
+  }
+
+  // Workspace runtimes — feeds the presence dot's availability dimension
+  // (runtime.status + last_seen_at). Backend route registered in
+  // server/cmd/server/router.go:514 (GET /api/runtimes).
+  async listRuntimes(opts?: { signal?: AbortSignal }): Promise<RuntimeDevice[]> {
+    const raw = await this.fetch<unknown>("/api/runtimes", {
+      signal: opts?.signal,
+    });
+    return parseWithFallback(raw, RuntimeListSchema, EMPTY_RUNTIME_LIST, {
+      endpoint: "listRuntimes",
+    });
+  }
+
+  // Workspace-wide active agent tasks + each agent's most recent terminal —
+  // feeds the workload dimension of presence (currently unused in the mobile
+  // dot; reserved for the P1 long-press peek sheet). Listed here now so the
+  // realtime invalidation path can be wired in one PR. Backend route at
+  // server/cmd/server/router.go:539 (GET /api/agent-task-snapshot).
+  async listAgentTaskSnapshot(
+    opts?: { signal?: AbortSignal },
+  ): Promise<AgentTask[]> {
+    const raw = await this.fetch<unknown>("/api/agent-task-snapshot", {
+      signal: opts?.signal,
+    });
+    return parseWithFallback(raw, AgentTaskListSchema, EMPTY_AGENT_TASK_LIST, {
+      endpoint: "listAgentTaskSnapshot",
+    });
+  }
+
+  async listSquads(opts?: { signal?: AbortSignal }): Promise<Squad[]> {
+    const raw = await this.fetch<unknown>("/api/squads", {
+      signal: opts?.signal,
+    });
+    return parseWithFallback(raw, SquadListSchema, EMPTY_SQUAD_LIST, {
+      endpoint: "listSquads",
     });
   }
 

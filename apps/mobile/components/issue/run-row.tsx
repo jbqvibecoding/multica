@@ -38,7 +38,7 @@ export function RunRow({ task, issueId }: Props) {
 
   return (
     <View className="flex-row items-start gap-3 py-2">
-      <ActorAvatar type="agent" id={task.agent_id} size={28} />
+      <ActorAvatar type="agent" id={task.agent_id} size={28} showPresence />
       <View className="flex-1 gap-1">
         <Text
           className="text-sm text-foreground"

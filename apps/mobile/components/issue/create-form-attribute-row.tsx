@@ -97,6 +97,7 @@ export function CreateFormAttributeRow({
                 type={assignee.type}
                 id={assignee.id}
                 size={16}
+                showPresence
               />
             ) : (
               <Ionicons

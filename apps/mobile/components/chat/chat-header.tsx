@@ -57,6 +57,7 @@ export function ChatHeader({
           type={currentAgent ? "agent" : null}
           id={currentAgent?.id ?? null}
           size={28}
+          showPresence
         />
         <View className="flex-1">
           <View className="flex-row items-center gap-1">

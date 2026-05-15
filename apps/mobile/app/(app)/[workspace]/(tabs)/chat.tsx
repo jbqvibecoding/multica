@@ -64,6 +64,7 @@ import {
 import { useChatSessionRealtime } from "@/data/realtime/use-chat-session-realtime";
 import { canAssignAgent } from "@/lib/can-assign-agent";
 import { useWorkspaceAgentAvailability } from "@/lib/workspace-agent-availability";
+import { useAgentPresence } from "@/lib/use-agent-presence";
 import { ChatHeader } from "@/components/chat/chat-header";
 import { ChatMessageList } from "@/components/chat/chat-message-list";
 import { ChatComposer } from "@/components/chat/chat-composer";
@@ -71,6 +72,7 @@ import { StatusPill } from "@/components/chat/status-pill";
 import { SessionSheet } from "@/components/chat/session-sheet";
 import { AgentPickerSheet } from "@/components/chat/agent-picker-sheet";
 import { NoAgentBanner } from "@/components/chat/no-agent-banner";
+import { OfflineBanner } from "@/components/chat/offline-banner";
 
 export default function ChatTab() {
   const qc = useQueryClient();
@@ -155,6 +157,12 @@ export default function ChatTab() {
   }, [selectedAgentId, availableAgents, activeSession, agents]);
 
   const availability = useWorkspaceAgentAvailability();
+  // Current agent's runtime-driven presence — drives the OfflineBanner above
+  // the composer. `"loading"` collapses to `undefined` so the banner stays
+  // silent during cold fetch (avoids a 1s flash of speculative offline copy).
+  const presenceDetail = useAgentPresence(wsId, currentAgent?.id);
+  const presenceAvailability =
+    presenceDetail === "loading" ? undefined : presenceDetail.availability;
   const isArchived = activeSession?.status === "archived";
   const sending = !!pendingTask?.task_id;
 
@@ -399,6 +407,10 @@ export default function ChatTab() {
             unscrollable. */}
         <ChatMessageList messages={messages} loading={messagesLoading} />
         <StatusPill pendingTask={pendingTask} onStop={handleStop} />
+        <OfflineBanner
+          agentName={currentAgent?.name}
+          availability={presenceAvailability}
+        />
         <ChatComposer
           value={draft}
           onChangeText={(next) => setDraft(draftKey, next)}

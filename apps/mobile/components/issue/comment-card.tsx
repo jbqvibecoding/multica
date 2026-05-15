@@ -231,6 +231,7 @@ function CommentBody({
             type={entry.actor_type as "member" | "agent"}
             id={entry.actor_id}
             size={24}
+            showPresence
           />
           <Text className="text-sm font-medium text-foreground">{name}</Text>
           <Text className="text-xs text-muted-foreground">

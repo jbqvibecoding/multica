@@ -9,6 +9,8 @@ import { useIssuesRealtime } from "@/data/realtime/use-issues-realtime";
 import { useMyIssuesRealtime } from "@/data/realtime/use-my-issues-realtime";
 import { useChatSessionsRealtime } from "@/data/realtime/use-chat-sessions-realtime";
 import { useProjectsRealtime } from "@/data/realtime/use-projects-realtime";
+import { usePresenceRealtime } from "@/data/realtime/use-presence-realtime";
+import { useWorkspacePresencePrefetch } from "@/lib/use-workspace-presence-prefetch";
 import { ModalCloseButton } from "@/components/ui/modal-close-button";
 
 /**
@@ -26,6 +28,12 @@ function RealtimeSubscriptions() {
   useMyIssuesRealtime();
   useChatSessionsRealtime();
   useProjectsRealtime();
+  // Presence: warm the three queries up front so avatars don't flash a
+  // dotless first render, and listen for daemon/agent/task events to keep
+  // the runtime + snapshot caches fresh. See use-presence-realtime.ts for
+  // the deliberately-skipped high-frequency events.
+  useWorkspacePresencePrefetch();
+  usePresenceRealtime();
   return null;
 }
 

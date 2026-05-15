@@ -26,9 +26,11 @@ import type {
   MemberWithUser,
   Project,
   ProjectResource,
+  RuntimeDevice,
   SearchIssuesResponse,
   SearchProjectsResponse,
   SendChatMessageResponse,
+  Squad,
   User,
   Workspace,
 } from "@multica/core/types";
@@ -469,6 +471,62 @@ export const AgentSchema: z.ZodType<Agent> = z.object({
 
 export const AgentListSchema = z.array(AgentSchema).default([]);
 export const EMPTY_AGENT_LIST: Agent[] = [];
+
+// Runtime device — the daemon (local or cloud) an agent binds to. Mobile reads
+// it for the presence dot: `status` + `last_seen_at` drive the three-state
+// availability derivation in @multica/core/agents/derive-presence. All other
+// fields default safely so a backend that adds optional new metadata
+// (timezone, visibility flags, etc.) doesn't break the parse.
+export const RuntimeSchema: z.ZodType<RuntimeDevice> = z.object({
+  id: z.string(),
+  workspace_id: z.string().default(""),
+  daemon_id: z.string().nullable().default(null),
+  name: z.string().default(""),
+  runtime_mode: z.string().catch("local") as unknown as z.ZodType<
+    RuntimeDevice["runtime_mode"]
+  >,
+  provider: z.string().default(""),
+  launch_header: z.string().default(""),
+  // The two fields presence derivation actually reads. Status defaults to
+  // "offline" — a runtime row with an unparseable status is treated as
+  // unreachable, which is the safe degrade for the dot.
+  status: z.enum(["online", "offline"]).catch("offline"),
+  last_seen_at: z.string().nullable().default(null),
+  device_info: z.string().default(""),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  owner_id: z.string().nullable().default(null),
+  visibility: z.string().catch("private") as unknown as z.ZodType<
+    RuntimeDevice["visibility"]
+  >,
+  timezone: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const RuntimeListSchema = z.array(RuntimeSchema).default([]);
+export const EMPTY_RUNTIME_LIST: RuntimeDevice[] = [];
+
+// Squad schema — fields mobile actually consumes for the @mention suggestion
+// bar (id, name, archived_at filter) plus identity/timestamp fields that are
+// safe to default. `.loose()` so the server can add squad fields without
+// breaking the parser.
+export const SquadSchema: z.ZodType<Squad> = z.object({
+  id: z.string(),
+  workspace_id: z.string().default(""),
+  name: z.string().default(""),
+  description: z.string().default(""),
+  instructions: z.string().default(""),
+  avatar_url: z.string().nullable().default(null),
+  leader_id: z.string().default(""),
+  creator_id: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+  archived_at: z.string().nullable().default(null),
+  archived_by: z.string().nullable().default(null),
+}).loose();
+
+export const SquadListSchema = z.array(SquadSchema).default([]);
+export const EMPTY_SQUAD_LIST: Squad[] = [];
 
 // Single-issue fallback used by getIssue. Mobile reuses IssueSchema from core
 // for parsing; this sentinel lets parseWithFallback yield a structurally-

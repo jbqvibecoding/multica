@@ -1,7 +1,7 @@
 /**
  * Mobile ActorAvatar. Mirrors the role of packages/views/common/actor-avatar.tsx
- * (member/agent → avatar URL or initials chip), but stripped down for phone
- * use: no hover card, no presence dot, no nested focus management.
+ * (member/agent → avatar URL or initials chip), stripped down for phone use:
+ * no hover card, no nested focus management.
  *
  * Behavioral parity rules (apps/mobile/CLAUDE.md):
  *   - Same actor type → same name → same initials. Lookup is shared via
@@ -9,12 +9,21 @@
  *   - Agents get distinct visual treatment (brand-tinted background) to
  *     match web's "agents render with distinct styling" rule from the
  *     repo-root CLAUDE.md "Agent Assignees" section.
+ *
+ * Presence dot: opt-in via `showPresence`. Mirrors web's `showStatusDot`
+ * (`packages/views/common/actor-avatar.tsx:51`). The prop is opt-in (default
+ * false) because the dot mounts `useAgentPresence` — three queries +
+ * 30s wall-clock tick — and we don't want every comment-author thumbnail
+ * subscribing to that.
  */
 import { Image, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useActorLookup, getInitials } from "@/data/use-actor-name";
+import { useWorkspaceStore } from "@/data/workspace-store";
+import { useAgentPresence } from "@/lib/use-agent-presence";
+import { PresenceDot } from "@/components/ui/presence-dot";
 
 // `system` actors are server-side automation (state changes triggered by the
 // platform itself, not a member or an agent). InboxItem.actor_type carries
@@ -26,9 +35,35 @@ interface Props {
   type: "member" | "agent" | "system" | "squad" | null | undefined;
   id: string | null | undefined;
   size?: number;
+  /**
+   * Overlay a 3-state presence dot at the bottom-right corner. No-op for
+   * non-agent actors. Opt-in to keep useAgentPresence — and its three
+   * subscriptions — off thumbnails that don't need it.
+   */
+  showPresence?: boolean;
 }
 
-export function ActorAvatar({ type, id, size = 32 }: Props) {
+export function ActorAvatar({ type, id, size = 32, showPresence }: Props) {
+  const avatar = <BareAvatar type={type} id={id} size={size} />;
+
+  if (!showPresence || type !== "agent" || !id) {
+    return avatar;
+  }
+  return <AgentAvatarWithPresence id={id} size={size}>{avatar}</AgentAvatarWithPresence>;
+}
+
+// Pure avatar render — no presence subscription, no workspace lookup. Kept
+// separate so non-agent avatars and `showPresence=false` agent avatars do
+// zero presence work.
+function BareAvatar({
+  type,
+  id,
+  size,
+}: {
+  type: Props["type"];
+  id: Props["id"];
+  size: number;
+}) {
   const { getName, getAvatarUrl } = useActorLookup();
 
   if (type === "system") {
@@ -83,6 +118,41 @@ export function ActorAvatar({ type, id, size = 32 }: Props) {
       >
         {getInitials(name)}
       </Text>
+    </View>
+  );
+}
+
+// Wraps an agent avatar in a `relative` container with a corner dot. The
+// dot is suppressed while presence is still loading so the avatar never
+// flashes a speculative "offline" gray before the queries resolve.
+function AgentAvatarWithPresence({
+  id,
+  size,
+  children,
+}: {
+  id: string;
+  size: number;
+  children: React.ReactNode;
+}) {
+  const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const detail = useAgentPresence(wsId, id);
+  // Match web's size threshold (packages/views/common/actor-avatar.tsx:194).
+  const dotSize = size >= 24 ? 8 : 6;
+
+  return (
+    <View
+      style={{ width: size, height: size }}
+      className="relative"
+    >
+      {children}
+      {detail !== "loading" && (
+        <View
+          style={{ position: "absolute", bottom: -1, right: -1 }}
+          pointerEvents="none"
+        >
+          <PresenceDot availability={detail.availability} size={dotSize} />
+        </View>
+      )}
     </View>
   );
 }

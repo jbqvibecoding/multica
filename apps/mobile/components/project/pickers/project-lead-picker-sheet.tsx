@@ -213,7 +213,7 @@ function PickerRow({
         checked && "bg-secondary",
       )}
     >
-      <ActorAvatar type={type} id={id} size={24} />
+      <ActorAvatar type={type} id={id} size={24} showPresence />
       <Text className="flex-1 text-sm text-foreground" numberOfLines={1}>
         {name}
       </Text>

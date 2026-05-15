@@ -34,7 +34,7 @@ export function InboxRow({ item, onPress }: Props) {
   return (
     <Pressable onPress={onPress} className="bg-background active:bg-secondary px-4 py-3">
       <View className="flex-row gap-3">
-        <ActorAvatar type={actorType} id={actorId} size={36} />
+        <ActorAvatar type={actorType} id={actorId} size={36} showPresence />
         <View className="flex-1 min-w-0">
           {/* Top row: [unread dot + title] (left) | [status icon] (right) */}
           <View className="flex-row items-center gap-2">

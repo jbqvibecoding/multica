@@ -73,7 +73,7 @@ export function AgentPickerSheet({
                           selected && "bg-secondary/60",
                         )}
                       >
-                        <ActorAvatar type="agent" id={agent.id} size={32} />
+                        <ActorAvatar type="agent" id={agent.id} size={32} showPresence />
                         <View className="flex-1">
                           <Text
                             className="text-sm font-medium text-foreground"

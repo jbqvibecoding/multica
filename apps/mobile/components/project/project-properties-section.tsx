@@ -74,6 +74,7 @@ export function ProjectPropertiesSection({
               type={project.lead_type}
               id={project.lead_id}
               size={20}
+              showPresence
             />
           ) : (
             <PlaceholderAvatar />

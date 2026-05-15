@@ -101,6 +101,7 @@ export function SessionSheet({
                   type="agent"
                   id={session.agent_id}
                   size={32}
+                  showPresence
                 />
                 <View className="flex-1">
                   <Text
