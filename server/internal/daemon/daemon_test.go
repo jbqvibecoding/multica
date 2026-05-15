@@ -1712,3 +1712,64 @@ func TestHandleTask_ReportsUsageWhenCancelledByPoll(t *testing.T) {
 		t.Fatalf("usage reported before poll-status (order: %v) — poll-status must come first", order)
 	}
 }
+
+// TestHandleTask_UsageReportedOnceOnNormalCompletion verifies that /usage is
+// called exactly once when a task completes normally (not cancelled). Regression
+// test for the merge-conflict duplicate usage block.
+func TestHandleTask_UsageReportedOnceOnNormalCompletion(t *testing.T) {
+	t.Parallel()
+
+	var usageCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/start"):
+			w.WriteHeader(http.StatusOK)
+		case strings.HasSuffix(r.URL.Path, "/progress"):
+			w.WriteHeader(http.StatusOK)
+		case strings.HasSuffix(r.URL.Path, "/usage"):
+			usageCount.Add(1)
+			w.WriteHeader(http.StatusOK)
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"running"}`))
+		case strings.HasSuffix(r.URL.Path, "/result"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		client:             NewClient(srv.URL),
+		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:         make(map[string]*workspaceState),
+		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
+		cancelPollInterval: time.Hour,
+	}
+
+	d.runner = taskRunnerFunc(func(_ context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
+		return TaskResult{
+			Status:    "completed",
+			SessionID: "sess-1",
+			Usage: []TaskUsageEntry{
+				{Provider: "anthropic", Model: "claude-opus-4-6", InputTokens: 200, OutputTokens: 100},
+			},
+		}, nil
+	})
+
+	task := Task{
+		ID:        "task-usage-once",
+		RuntimeID: "rt-1",
+		IssueID:   "issue-1",
+		Agent:     &AgentData{Name: "test-agent"},
+	}
+
+	d.handleTask(context.Background(), task, 0)
+
+	if got := usageCount.Load(); got != 1 {
+		t.Fatalf("/usage called %d times, want exactly 1", got)
+	}
+}
