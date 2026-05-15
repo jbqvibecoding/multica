@@ -704,7 +704,11 @@ export function RoleEditor({
 
   const commit = async (next: string) => {
     const trimmed = next.trim();
-    if (trimmed === value.trim()) {
+    // Blank input is a no-op: clearing a role requires an explicit clear
+    // action, which doesn't exist yet. Without this guard, opening the editor
+    // on an existing role and pressing Enter on an empty input would commit
+    // "" and wipe the role.
+    if (trimmed === "" || trimmed === value.trim()) {
       setOpen(false);
       setQuery("");
       return;
@@ -718,7 +722,17 @@ export function RoleEditor({
   };
 
   return (
-    <Popover open={open} onOpenChange={(v) => { if (!saving) setOpen(v); }}>
+    <Popover
+      open={open}
+      onOpenChange={(v) => {
+        if (saving) return;
+        setOpen(v);
+        // Discard the in-flight draft whenever the popover closes via a
+        // non-saving path (outside click, Esc, trigger re-click). `commit`
+        // owns clearing on the saving path.
+        if (!v) setQuery("");
+      }}
+    >
       <PopoverTrigger
         render={
           <button

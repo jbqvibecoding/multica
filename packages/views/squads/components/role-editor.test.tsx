@@ -61,12 +61,24 @@ vi.mock("@multica/ui/components/ui/popover", () => {
   function PopoverContent({
     children,
     __popoverOpen,
+    __setPopoverOpen,
   }: {
     children: ReactNode;
     __popoverOpen?: boolean;
+    __setPopoverOpen?: (v: boolean) => void;
   }) {
     if (!__popoverOpen) return null;
-    return <div data-testid="popover-content">{children}</div>;
+    return (
+      <div data-testid="popover-content">
+        {/* Mock-only: drives the real Popover's outside-click → onOpenChange(false) path */}
+        <button
+          type="button"
+          data-testid="mock-popover-close"
+          onClick={() => __setPopoverOpen?.(false)}
+        />
+        {children}
+      </div>
+    );
   }
   return { Popover, PopoverTrigger, PopoverContent };
 });
@@ -193,6 +205,28 @@ describe("RoleEditor (combobox)", () => {
       <RoleEditor value="Reviewer" suggestions={[]} onSave={() => Promise.resolve()} />,
     );
     expect(screen.getByTestId("role-editor-pencil")).toBeInTheDocument();
+  });
+
+  it("discards the draft when the popover closes and does not commit it on reopen", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<RoleEditor value="" suggestions={[]} onSave={onSave} />);
+    await userEvent.click(screen.getByRole("button", { name: /add role/i }));
+    await userEvent.type(screen.getByPlaceholderText(/type or pick/i), "Part");
+    await userEvent.click(screen.getByTestId("mock-popover-close"));
+    await userEvent.click(screen.getByRole("button", { name: /add role/i }));
+    const reopened = screen.getByPlaceholderText(/type or pick/i);
+    expect(reopened).toHaveValue("");
+    await userEvent.type(reopened, "{Enter}");
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("treats blank Enter as a no-op on an existing role (does not clear)", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<RoleEditor value="Reviewer" suggestions={[]} onSave={onSave} />);
+    await userEvent.click(screen.getByRole("button", { name: /reviewer/i }));
+    const input = screen.getByPlaceholderText(/type or pick/i);
+    await userEvent.type(input, "{Enter}");
+    expect(onSave).not.toHaveBeenCalled();
   });
 
   it("filters out the current value from suggestions", async () => {
