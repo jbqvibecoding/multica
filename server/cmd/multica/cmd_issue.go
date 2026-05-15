@@ -424,9 +424,9 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 	}
 
 	fullID, _ := cmd.Flags().GetBool("full-id")
-	headers := []string{"KEY", "TITLE", "STATUS", "PRIORITY", "ASSIGNEE", "DUE DATE"}
+	headers := []string{"KEY", "TITLE", "STATUS", "PRIORITY", "ASSIGNEE", "START DATE", "DUE DATE"}
 	if fullID {
-		headers = []string{"KEY", "ID", "TITLE", "STATUS", "PRIORITY", "ASSIGNEE", "DUE DATE"}
+		headers = []string{"KEY", "ID", "TITLE", "STATUS", "PRIORITY", "ASSIGNEE", "START DATE", "DUE DATE"}
 	}
 	actors := loadActorDisplayLookup(ctx, client)
 	rows := make([][]string, 0, len(issuesRaw))
@@ -436,6 +436,10 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 			continue
 		}
 		assignee := formatAssignee(issue, actors)
+		startDate := strVal(issue, "start_date")
+		if startDate != "" && len(startDate) >= 10 {
+			startDate = startDate[:10]
+		}
 		dueDate := strVal(issue, "due_date")
 		if dueDate != "" && len(dueDate) >= 10 {
 			dueDate = dueDate[:10]
@@ -446,6 +450,7 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 			strVal(issue, "status"),
 			strVal(issue, "priority"),
 			assignee,
+			startDate,
 			dueDate,
 		}
 		if fullID {
@@ -456,6 +461,7 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 				strVal(issue, "status"),
 				strVal(issue, "priority"),
 				assignee,
+				startDate,
 				dueDate,
 			}
 		}
@@ -488,17 +494,22 @@ func runIssueGet(cmd *cobra.Command, args []string) error {
 	if output == "table" {
 		actors := loadActorDisplayLookup(ctx, client)
 		assignee := formatAssignee(issue, actors)
+		startDate := strVal(issue, "start_date")
+		if startDate != "" && len(startDate) >= 10 {
+			startDate = startDate[:10]
+		}
 		dueDate := strVal(issue, "due_date")
 		if dueDate != "" && len(dueDate) >= 10 {
 			dueDate = dueDate[:10]
 		}
-		headers := []string{"KEY", "TITLE", "STATUS", "PRIORITY", "ASSIGNEE", "DUE DATE", "DESCRIPTION"}
+		headers := []string{"KEY", "TITLE", "STATUS", "PRIORITY", "ASSIGNEE", "START DATE", "DUE DATE", "DESCRIPTION"}
 		rows := [][]string{{
 			issueDisplayKey(issue),
 			strVal(issue, "title"),
 			strVal(issue, "status"),
 			strVal(issue, "priority"),
 			assignee,
+			startDate,
 			dueDate,
 			strVal(issue, "description"),
 		}}
