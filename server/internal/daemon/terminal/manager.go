@@ -132,7 +132,30 @@ func (m *Manager) Open(ctx context.Context, p OpenParams) (*PtySession, error) {
 	if info.WorkDir == "" {
 		return nil, ErrTaskNotFound
 	}
+	return m.openWith(info, p)
+}
 
+// OpenWithInfo spawns a PTY against a caller-supplied TaskInfo, bypassing
+// the configured TaskLookup. Production daemon wiring takes this path
+// because the server resolves task metadata from its DB before forwarding
+// terminal.open over the daemonws hub — the daemon trusts the server-
+// authenticated payload and does not have its own task cache. The
+// workspace mismatch check still runs so a server bug or a relayed frame
+// cannot cross workspace boundaries.
+func (m *Manager) OpenWithInfo(_ context.Context, info TaskInfo, p OpenParams) (*PtySession, error) {
+	if info.WorkspaceID != p.WorkspaceID {
+		return nil, ErrWorkspaceMismatch
+	}
+	if info.WorkDir == "" {
+		return nil, ErrTaskNotFound
+	}
+	if info.TaskID == "" {
+		info.TaskID = p.TaskID
+	}
+	return m.openWith(info, p)
+}
+
+func (m *Manager) openWith(info TaskInfo, p OpenParams) (*PtySession, error) {
 	cols, rows := normalizeSize(p.Cols, p.Rows)
 	env := buildEnv(info, p.UserID)
 

@@ -116,6 +116,13 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	writerDone := make(chan struct{})
 	go d.runWSWriter(conn, writes, writerDone)
 
+	// Expose this connection's writer to the terminal bridge so it can push
+	// terminal.* frames back to the server. The defer in the parent cleanup
+	// block clears the pointer (and tears any live PTYs down) before the
+	// writes channel is closed.
+	d.installWSWrites(writes)
+	defer d.clearWSWrites()
+
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
 	hbDone := make(chan struct{})
 	go func() {
@@ -287,6 +294,13 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				continue
 			}
 			d.handleWSHeartbeatAck(context.Background(), &ack)
+		case protocol.MessageTypeTerminalOpen,
+			protocol.MessageTypeTerminalData,
+			protocol.MessageTypeTerminalResize,
+			protocol.MessageTypeTerminalClose:
+			if bridge := d.currentTerminalBridge(); bridge != nil {
+				bridge.handleFrame(msg.Type, msg.Payload)
+			}
 		}
 	}
 }

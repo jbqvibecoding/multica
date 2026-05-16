@@ -331,6 +331,100 @@ func TestManager_RejectsCrossWorkspace(t *testing.T) {
 	}
 }
 
+func TestManager_OpenWithInfoBypassesLookup(t *testing.T) {
+	// Manager is built with a nil lookup; OpenWithInfo must still succeed
+	// when the server-supplied TaskInfo is well-formed. This is the path
+	// daemonws hits in production — the daemon has no task cache, so the
+	// server resolves task metadata and embeds it on the protocol.
+	spawner := &fakeSpawner{
+		t:    t,
+		make: func(tt *testing.T, req SpawnRequest) (*fakePTY, error) { return newFakePTY(tt, req.Cols, req.Rows), nil },
+	}
+	mgr := NewManager(ManagerConfig{
+		ShellPath: "/usr/bin/bash",
+		ShellArgs: []string{"-l"},
+		Spawner:   spawner,
+	}, nil)
+	defer mgr.Close()
+
+	dir := t.TempDir()
+	info := TaskInfo{
+		TaskID:         "task-via-ws",
+		WorkspaceID:    "ws-A",
+		IssueID:        "issue-1",
+		WorkDir:        dir,
+		PriorSessionID: "claude-session-xyz",
+	}
+	sess, err := mgr.OpenWithInfo(context.Background(), info, OpenParams{
+		TaskID:      "task-via-ws",
+		WorkspaceID: "ws-A",
+		UserID:      "user-1",
+	})
+	if err != nil {
+		t.Fatalf("OpenWithInfo: %v", err)
+	}
+	if sess.WorkDir() != dir {
+		t.Errorf("WorkDir = %q, want %q", sess.WorkDir(), dir)
+	}
+	req := spawner.lastRequest()
+	if req.Cwd != dir {
+		t.Errorf("spawn cwd = %q, want %q", req.Cwd, dir)
+	}
+	gotEnv := map[string]string{}
+	for _, kv := range req.Env {
+		eq := -1
+		for i, c := range kv {
+			if c == '=' {
+				eq = i
+				break
+			}
+		}
+		if eq > 0 {
+			gotEnv[kv[:eq]] = kv[eq+1:]
+		}
+	}
+	if gotEnv["MULTICA_WORKSPACE_ID"] != "ws-A" {
+		t.Errorf("MULTICA_WORKSPACE_ID = %q, want ws-A", gotEnv["MULTICA_WORKSPACE_ID"])
+	}
+	if gotEnv["MULTICA_ISSUE_ID"] != "issue-1" {
+		t.Errorf("MULTICA_ISSUE_ID = %q, want issue-1", gotEnv["MULTICA_ISSUE_ID"])
+	}
+	if gotEnv["MULTICA_TASK_ID"] != "task-via-ws" {
+		t.Errorf("MULTICA_TASK_ID = %q, want task-via-ws", gotEnv["MULTICA_TASK_ID"])
+	}
+	if gotEnv["CLAUDE_SESSION_ID"] != "claude-session-xyz" {
+		t.Errorf("CLAUDE_SESSION_ID = %q, want claude-session-xyz", gotEnv["CLAUDE_SESSION_ID"])
+	}
+}
+
+func TestManager_OpenWithInfoRejectsCrossWorkspace(t *testing.T) {
+	// OpenWithInfo skips the lookup, but the workspace_id check on the
+	// caller-supplied OpenParams vs. the supplied TaskInfo still has to
+	// run — otherwise a misrouted frame from one workspace could attach
+	// to another workspace's workdir.
+	spawner := &fakeSpawner{
+		t:    t,
+		make: func(tt *testing.T, req SpawnRequest) (*fakePTY, error) { return newFakePTY(tt, req.Cols, req.Rows), nil },
+	}
+	mgr := NewManager(ManagerConfig{Spawner: spawner}, nil)
+	defer mgr.Close()
+
+	_, err := mgr.OpenWithInfo(context.Background(), TaskInfo{
+		TaskID:      "task-via-ws",
+		WorkspaceID: "ws-A",
+		WorkDir:     t.TempDir(),
+	}, OpenParams{
+		TaskID:      "task-via-ws",
+		WorkspaceID: "ws-B",
+	})
+	if !errors.Is(err, ErrWorkspaceMismatch) {
+		t.Fatalf("err = %v, want ErrWorkspaceMismatch", err)
+	}
+	if got := len(mgr.Sessions()); got != 0 {
+		t.Errorf("Sessions after rejected OpenWithInfo = %d, want 0", got)
+	}
+}
+
 func TestManager_RejectsUnknownTask(t *testing.T) {
 	f := newFixture(t)
 	defer f.mgr.Close()

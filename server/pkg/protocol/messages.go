@@ -192,13 +192,22 @@ const (
 // TerminalOpenPayload requests a PTY session bound to the given task's
 // workdir. WorkspaceID is the workspace the caller is acting in; the daemon
 // must reject if it does not match the task's workspace.
+//
+// The server resolves WorkDir / IssueID / PriorSessionID from its own DB
+// (the daemon has no persistent task cache) and embeds them here before
+// forwarding to the daemon. The daemon trusts these fields because the
+// daemonws connection is already authenticated and scoped — but it still
+// rechecks WorkspaceID against the request body to catch a misrouted frame.
 type TerminalOpenPayload struct {
-	RequestID   string `json:"request_id"`
-	TaskID      string `json:"task_id"`
-	WorkspaceID string `json:"workspace_id"`
-	UserID      string `json:"user_id,omitempty"`
-	Cols        uint16 `json:"cols"`
-	Rows        uint16 `json:"rows"`
+	RequestID      string `json:"request_id"`
+	TaskID         string `json:"task_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	UserID         string `json:"user_id,omitempty"`
+	IssueID        string `json:"issue_id,omitempty"`
+	WorkDir        string `json:"work_dir,omitempty"`
+	PriorSessionID string `json:"prior_session_id,omitempty"`
+	Cols           uint16 `json:"cols"`
+	Rows           uint16 `json:"rows"`
 }
 
 // TerminalOpenedPayload echoes the request_id and carries the session_id the

@@ -53,6 +53,7 @@ import { ResolvedThreadBar } from "./resolved-thread-bar";
 import { collectThreadReplies } from "./thread-utils";
 import { AgentLiveCard } from "./agent-live-card";
 import { ExecutionLogSection } from "./execution-log-section";
+import { TerminalPanel } from "./terminal-panel";
 import { PullRequestList } from "./pull-request-list";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
@@ -1366,6 +1367,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           when there are no runs to show. */}
       <ExecutionLogSection issueId={id} />
 
+      {/* Terminal panel — attaches to the PTY running in the daemon's
+          workdir for the latest agent task. Desktop-only (the panel
+          itself renders an explanatory placeholder on web).
+          See MUL-2295. */}
+      <TerminalPanelSection issueId={id} workspaceId={wsId} />
+
       {/* Token usage */}
       {usage && usage.task_count > 0 && (
         <div>
@@ -1902,5 +1909,25 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       </div>
       </ResizablePanel>
     </ResizablePanelGroup>
+  );
+}
+
+// TerminalPanelSection wraps TerminalPanel in a collapsible header that
+// matches the existing sidebar sections (Token usage, etc.). Collapsed
+// by default — opening a PTY is an explicit action, and ResizeObserver +
+// xterm bootstrap should not run for every issue view.
+function TerminalPanelSection({ issueId, workspaceId }: { issueId: string; workspaceId: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-6">
+      <button
+        className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${open ? "" : "text-muted-foreground hover:text-foreground"}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        Terminal
+        <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`} />
+      </button>
+      {open && <TerminalPanel issueId={issueId} workspaceId={workspaceId} />}
+    </div>
   );
 }

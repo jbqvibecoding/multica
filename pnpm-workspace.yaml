@@ -49,6 +49,10 @@ catalog:
   # Virtualized timeline (issue detail comments)
   react-virtuoso: "^4.14.0"
 
+  # Interactive PTY rendering (Issue → Terminal panel on Desktop, MUL-2295)
+  "@xterm/xterm": "^5.5.0"
+  "@xterm/addon-fit": "^0.10.0"
+
   # Product analytics
   posthog-js: "^1.176.1"
 

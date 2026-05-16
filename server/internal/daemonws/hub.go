@@ -82,6 +82,9 @@ type Hub struct {
 
 	hbMu        sync.RWMutex
 	onHeartbeat HeartbeatHandler
+
+	termMu     sync.RWMutex
+	termRouter *TerminalRouter
 }
 
 func NewHub() *Hub {
@@ -146,7 +149,12 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, identity C
 	c := &client{
 		hub:      h,
 		conn:     conn,
-		send:     make(chan []byte, 16),
+		// Buffer sized for PTY traffic: terminal.data frames carry up to a
+		// few KB each and the read pump from xterm.js can fall behind during
+		// large bursts (build output, `cat` of a big file). 256 frames gives
+		// ~1MB of slack before we start dropping; wakeup hints and heartbeat
+		// acks coexist on the same queue but are tiny in comparison.
+		send:     make(chan []byte, 256),
 		identity: identity,
 		runtimes: runtimes,
 	}
@@ -320,7 +328,12 @@ func (c *client) readPump() {
 		c.conn.Close()
 	}()
 
-	c.conn.SetReadLimit(4096)
+	// Terminal frames embed base64-encoded PTY chunks; readLoop on the
+	// daemon side caps each chunk at 4KB raw, which is ~5.6KB base64 plus
+	// JSON envelope. 64KB leaves headroom for future growth without
+	// disconnecting daemons that briefly exceed the legacy 4KB heartbeat-
+	// only ceiling.
+	c.conn.SetReadLimit(64 * 1024)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -348,6 +361,14 @@ func (c *client) handleFrame(raw []byte) {
 	switch msg.Type {
 	case protocol.EventDaemonHeartbeat:
 		c.handleHeartbeatFrame(msg.Payload)
+	case protocol.MessageTypeTerminalOpened,
+		protocol.MessageTypeTerminalData,
+		protocol.MessageTypeTerminalClose,
+		protocol.MessageTypeTerminalExit,
+		protocol.MessageTypeTerminalError:
+		if router := c.hub.terminalRouter(); router != nil {
+			router.Route(raw, msg.Type, msg.Payload)
+		}
 	default:
 		// Unknown app messages are intentionally ignored for forward
 		// compatibility with future daemon → server message types.

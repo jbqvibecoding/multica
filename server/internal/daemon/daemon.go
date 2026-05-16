@@ -18,6 +18,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	"github.com/multica-ai/multica/server/internal/daemon/terminal"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
@@ -138,6 +139,24 @@ type Daemon struct {
 	// deleted bare clone and an unrelated `not empty` cleanup failure.
 	bgSyncs sync.WaitGroup
 
+	// terminalManager owns every live PTY this daemon hosts on behalf of
+	// users opening the Issue → Terminal panel. Constructed in New() so
+	// tests can override the manager config via cfg fields if needed
+	// without forcing the production daemon to wire it lazily.
+	terminalManager *terminal.Manager
+	// terminalBridge mediates between the WS hub (server-side) and the
+	// terminalManager. Only non-nil while a daemonws connection is up; the
+	// wakeup loop swaps in a fresh bridge on every reconnect because
+	// session_ids cannot survive a hub disconnect.
+	terminalBridgeMu sync.RWMutex
+	terminalBridge   *terminalBridge
+	// wsWritesMu guards wsWrites. wsWrites is the active daemonws writer
+	// queue (nil while disconnected); the terminalBridge funnels every
+	// outbound terminal.* frame through Daemon.sendWSFrame, which reads
+	// this pointer under the lock so reconnects don't race the bridge.
+	wsWritesMu sync.RWMutex
+	wsWrites   chan<- []byte
+
 	runner             taskRunner    // executes agent tasks; set to d.runTask by New(), overridable in tests
 	cancelPollInterval time.Duration // how often handleTask polls for server-side cancellation; overridable in tests
 	// runUpdateFn executes the brew-or-download upgrade. Set to d.runUpdate by
@@ -171,7 +190,78 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.runUpdateFn = d.runUpdate
+	// The terminal manager has no TaskLookup wired: every Open call goes
+	// through OpenWithInfo using a TaskInfo that the server resolved from
+	// the DB before forwarding terminal.open over daemonws (the daemon
+	// does not maintain a persistent task cache).
+	d.terminalManager = terminal.NewManager(terminal.ManagerConfig{
+		IdleTimeout: terminal.DefaultIdleTimeout,
+		Logger:      logger,
+	}, nil)
 	return d
+}
+
+// sendWSFrame pushes a raw frame onto the current daemonws writer queue.
+// Returns false when no connection is active or the writer queue is
+// saturated — callers (today: terminalBridge) drop the frame rather than
+// block, because the next reconnect or queue drain will unstick us.
+func (d *Daemon) sendWSFrame(frame []byte) bool {
+	d.wsWritesMu.RLock()
+	writes := d.wsWrites
+	d.wsWritesMu.RUnlock()
+	if writes == nil {
+		return false
+	}
+	select {
+	case writes <- frame:
+		return true
+	default:
+		return false
+	}
+}
+
+// installWSWrites stores the connection-local writer queue so the bridge
+// can address it through Daemon.sendWSFrame. A fresh terminalBridge is
+// installed each call: session_ids minted on a previous WS connection are
+// not valid on the new one (the server-side proxy registered routing
+// against the old hub client), so it's cleaner to tear every PTY down
+// than to half-revive them.
+func (d *Daemon) installWSWrites(writes chan<- []byte) {
+	d.wsWritesMu.Lock()
+	d.wsWrites = writes
+	d.wsWritesMu.Unlock()
+
+	bridge := newTerminalBridge(d.terminalManager, d.logger, d.sendWSFrame)
+	d.terminalBridgeMu.Lock()
+	prev := d.terminalBridge
+	d.terminalBridge = bridge
+	d.terminalBridgeMu.Unlock()
+	if prev != nil {
+		prev.closeAll("ws_reconnect")
+	}
+}
+
+// clearWSWrites removes the writer pointer and tears down every live
+// terminal session bound to this connection. Called from the wakeup
+// connection's deferred cleanup.
+func (d *Daemon) clearWSWrites() {
+	d.wsWritesMu.Lock()
+	d.wsWrites = nil
+	d.wsWritesMu.Unlock()
+
+	d.terminalBridgeMu.Lock()
+	bridge := d.terminalBridge
+	d.terminalBridge = nil
+	d.terminalBridgeMu.Unlock()
+	if bridge != nil {
+		bridge.closeAll("ws_disconnect")
+	}
+}
+
+func (d *Daemon) currentTerminalBridge() *terminalBridge {
+	d.terminalBridgeMu.RLock()
+	defer d.terminalBridgeMu.RUnlock()
+	return d.terminalBridge
 }
 
 // setAgentVersion records the detected CLI version for an agent provider so

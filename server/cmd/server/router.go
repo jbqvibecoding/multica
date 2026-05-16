@@ -197,6 +197,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		realtime.HandleWebSocket(hub, mc, pr, slugResolver, w, r)
 	})
 
+	// Terminal proxy WebSocket: browser ↔ server ↔ daemonws hub ↔ daemon PTY.
+	// Auth is cookie-or-first-frame (browsers can't set Authorization on a
+	// WS upgrade), matching the /ws pattern above. Workspace + issue
+	// membership is enforced inside the handler before the upgrade so a
+	// 403 surfaces as an HTTP response rather than a silent WS close.
+	r.Get("/ws/issues/{issue_id}/terminal", h.HandleIssueTerminalWS)
+
 	// Local file serving (when using local storage)
 	if local, ok := store.(*storage.LocalStorage); ok {
 		r.Get("/uploads/*", func(w http.ResponseWriter, r *http.Request) {
