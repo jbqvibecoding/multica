@@ -383,18 +383,18 @@ func (h *Handler) fetchCommentsForList(ctx context.Context, args fetchCommentsAr
 		// requested ⇒ the SELECT exhausted matching threads, so there is
 		// no older page to scroll to.
 		//
-		// Additionally suppress the cursor when `since` is set and filtered
-		// the page empty. The pagination walks threads in strictly
-		// decreasing last_activity_at, so if every comment in this page is
-		// <= since then head.last_activity_at <= since, and every older
-		// thread (last_activity_at strictly less than head's) is also <=
-		// since by transitivity — none of them can produce a comment newer
-		// than `since`. Emitting a cursor in that case would invite the
-		// caller into a guaranteed-empty walk. Flagged by Elon in #2787's
-		// second review (MUL-2340 nit).
+		// Additionally suppress the cursor when `since` is set and the head
+		// thread's last_activity_at is already <= since. The pagination
+		// walks threads in strictly decreasing last_activity_at, so every
+		// older page has last_activity_at strictly less than the head's —
+		// if the head itself can't satisfy `> since`, no older thread can
+		// either. Predicating on the head (not on whether `comments` is
+		// empty) also catches the mixed case where this page keeps rows
+		// from fresher threads but the head thread is already past `since`.
+		// Flagged by Elon in #2787's second review (MUL-2340 nit).
 		out := fetchCommentsResult{Comments: comments}
 		emitCursor := len(seenRoot) >= args.RecentN && headRoot.Valid && headLast.Valid
-		if args.Since.Valid && len(comments) == 0 {
+		if emitCursor && args.Since.Valid && !headLast.Time.After(args.Since.Time) {
 			emitCursor = false
 		}
 		if emitCursor {
