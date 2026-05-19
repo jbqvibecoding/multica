@@ -34,8 +34,10 @@ import (
 //
 // InstallationID is admin-only: the numeric GitHub installation_id is the
 // management handle used by the Connect/Disconnect flows, so non-admin
-// members receive responses with the field omitted. See the list handler
-// for the role gate.
+// members receive responses with the field omitted. The list handler gates
+// it by role; realtime broadcasts always omit it because the WS fanout has
+// no per-recipient view (admins re-query the list endpoint on invalidation
+// to recover the management handle).
 type GitHubInstallationResponse struct {
 	ID               string  `json:"id"`
 	WorkspaceID      string  `json:"workspace_id"`
@@ -101,6 +103,19 @@ func githubInstallationToResponse(i db.GithubInstallation) GitHubInstallationRes
 		AccountAvatarURL: textToPtr(i.AccountAvatarUrl),
 		CreatedAt:        timestampToString(i.CreatedAt),
 	}
+}
+
+// githubInstallationToBroadcast returns the same shape as the list endpoint's
+// per-role response with the numeric `installation_id` stripped. Realtime
+// events fan out to every WS client subscribed to the workspace, so the
+// payload must match the weakest-role view — admin/owner clients re-query
+// the list endpoint to recover the management handle. The frontend uses
+// these events only to invalidate the installations query, so it does not
+// read `installation_id` off the broadcast.
+func githubInstallationToBroadcast(i db.GithubInstallation) GitHubInstallationResponse {
+	resp := githubInstallationToResponse(i)
+	resp.InstallationID = nil
+	return resp
 }
 
 func githubPullRequestToResponse(p db.GithubPullRequest) GitHubPullRequestResponse {
@@ -334,7 +349,7 @@ func (h *Handler) GitHubSetupCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publish(protocol.EventGitHubInstallationCreated, workspaceID, "system", "", map[string]any{
-		"installation": githubInstallationToResponse(inst),
+		"installation": githubInstallationToBroadcast(inst),
 	})
 	http.Redirect(w, r, settingsURL+"&github_connected=1", http.StatusFound)
 }
@@ -562,9 +577,12 @@ func (h *Handler) handleInstallationEvent(ctx context.Context, body []byte) {
 			slog.Warn("github: delete installation failed", "err", err, "installation_id", p.Installation.ID)
 			return
 		}
+		// Broadcast the internal row id only — the numeric installation_id is
+		// a management handle that non-admin members are not allowed to see.
+		// The frontend invalidates the installations query on this event and
+		// does not read the broadcast payload directly.
 		h.publish(protocol.EventGitHubInstallationDeleted, uuidToString(deleted.WorkspaceID), "system", "", map[string]any{
-			"installation_id": p.Installation.ID,
-			"id":              uuidToString(deleted.ID),
+			"id": uuidToString(deleted.ID),
 		})
 	case "created", "new_permissions_accepted", "unsuspend":
 		// We don't know which workspace this maps to from the webhook

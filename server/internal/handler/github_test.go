@@ -7,12 +7,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -1142,4 +1144,195 @@ func TestListGitHubInstallations_RoleGating(t *testing.T) {
 			t.Errorf("installation_id must be omitted for guest, row=%v", row)
 		}
 	})
+}
+
+// TestGitHubRoutes_RoleGating exercises the router-level middleware split
+// introduced in MUL-2413: GET installations runs under
+// RequireWorkspaceMemberFromURL while connect / delete remain behind
+// RequireWorkspaceRoleFromURL(owner, admin). The handler-level tests above
+// inject a member into context directly and so do not cover the middleware
+// itself — a future routing change that accidentally moved one of the
+// admin-only routes into the member group would slip past them.
+func TestGitHubRoutes_RoleGating(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture not initialized (no DB?)")
+	}
+	ctx := context.Background()
+
+	const slug = "github-routes-role-gating"
+	_, _ = testPool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, slug)
+
+	var wsID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO workspace (name, slug, description, issue_prefix)
+VALUES ($1, $2, $3, $4)
+RETURNING id
+`, "GitHub Routes Role Gating", slug, "github routes role gating", "GRG").Scan(&wsID); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	// Three workspace members + one outsider. We attach the requesting user
+	// via the X-User-ID header so the middleware reads them off the auth
+	// boundary just like a real request.
+	mkUser := func(t *testing.T, label string) string {
+		t.Helper()
+		var id string
+		email := fmt.Sprintf("github-routes-%s-%s@multica.ai", slug, label)
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id
+`, "GHR "+label, email).Scan(&id); err != nil {
+			t.Fatalf("create user %s: %v", label, err)
+		}
+		return id
+	}
+	adminUserID := mkUser(t, "admin")
+	memberUserID := mkUser(t, "member")
+	outsiderUserID := mkUser(t, "outsider")
+
+	for _, m := range []struct {
+		userID, role string
+	}{
+		{adminUserID, "admin"},
+		{memberUserID, "member"},
+	} {
+		if _, err := testPool.Exec(ctx, `
+INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, $3)
+`, wsID, m.userID, m.role); err != nil {
+			t.Fatalf("insert member (%s): %v", m.role, err)
+		}
+	}
+
+	const installationID int64 = 90909090
+	createdInst, err := testHandler.Queries.CreateGitHubInstallation(ctx, db.CreateGitHubInstallationParams{
+		WorkspaceID:    parseUUID(wsID),
+		InstallationID: installationID,
+		AccountLogin:   "routes-acct",
+		AccountType:    "User",
+	})
+	if err != nil {
+		t.Fatalf("CreateGitHubInstallation: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, wsID)
+		for _, uid := range []string{adminUserID, memberUserID, outsiderUserID} {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, uid)
+		}
+	})
+
+	// Build a router subtree mirroring the production wiring at
+	// server/cmd/server/router.go for the workspace-scoped GitHub routes.
+	// Mounting the real middleware is what makes this a routing-level test —
+	// the role split has to come from the chi groups, not from the handler.
+	router := chi.NewRouter()
+	router.Route("/api/workspaces/{id}", func(r chi.Router) {
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequireWorkspaceMemberFromURL(testHandler.Queries, "id"))
+			r.Get("/github/installations", testHandler.ListGitHubInstallations)
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequireWorkspaceRoleFromURL(testHandler.Queries, "id", "owner", "admin"))
+			r.Get("/github/connect", testHandler.GitHubConnect)
+			r.Delete("/github/installations/{installationId}", testHandler.DeleteGitHubInstallation)
+		})
+	})
+
+	exercise := func(t *testing.T, method, path, userID string) int {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		if userID != "" {
+			req.Header.Set("X-User-ID", userID)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	t.Run("GET installations is reachable by members", func(t *testing.T) {
+		if code := exercise(t, http.MethodGet, "/api/workspaces/"+wsID+"/github/installations", memberUserID); code != http.StatusOK {
+			t.Errorf("member GET installations: want 200, got %d", code)
+		}
+		if code := exercise(t, http.MethodGet, "/api/workspaces/"+wsID+"/github/installations", adminUserID); code != http.StatusOK {
+			t.Errorf("admin GET installations: want 200, got %d", code)
+		}
+	})
+
+	t.Run("GET installations rejects non-members", func(t *testing.T) {
+		// Outsider hits the workspace middleware before the handler — the
+		// middleware translates a missing membership row into 404.
+		if code := exercise(t, http.MethodGet, "/api/workspaces/"+wsID+"/github/installations", outsiderUserID); code != http.StatusNotFound {
+			t.Errorf("outsider GET installations: want 404, got %d", code)
+		}
+	})
+
+	t.Run("GET connect remains owner/admin only", func(t *testing.T) {
+		if code := exercise(t, http.MethodGet, "/api/workspaces/"+wsID+"/github/connect", adminUserID); code != http.StatusOK {
+			t.Errorf("admin GET connect: want 200, got %d", code)
+		}
+		if code := exercise(t, http.MethodGet, "/api/workspaces/"+wsID+"/github/connect", memberUserID); code != http.StatusForbidden {
+			t.Errorf("member GET connect: want 403, got %d", code)
+		}
+		if code := exercise(t, http.MethodGet, "/api/workspaces/"+wsID+"/github/connect", outsiderUserID); code != http.StatusNotFound {
+			t.Errorf("outsider GET connect: want 404, got %d", code)
+		}
+	})
+
+	t.Run("DELETE installation remains owner/admin only", func(t *testing.T) {
+		// Member: 403 — middleware rejects before the handler runs.
+		if code := exercise(t, http.MethodDelete, "/api/workspaces/"+wsID+"/github/installations/"+uuidToString(createdInst.ID), memberUserID); code != http.StatusForbidden {
+			t.Errorf("member DELETE installation: want 403, got %d", code)
+		}
+		// Outsider: 404 — workspace not found.
+		if code := exercise(t, http.MethodDelete, "/api/workspaces/"+wsID+"/github/installations/"+uuidToString(createdInst.ID), outsiderUserID); code != http.StatusNotFound {
+			t.Errorf("outsider DELETE installation: want 404, got %d", code)
+		}
+		// Admin: 204 and the row goes away.
+		if code := exercise(t, http.MethodDelete, "/api/workspaces/"+wsID+"/github/installations/"+uuidToString(createdInst.ID), adminUserID); code != http.StatusNoContent {
+			t.Errorf("admin DELETE installation: want 204, got %d", code)
+		}
+		var remaining int
+		if err := testPool.QueryRow(ctx, `SELECT COUNT(*) FROM github_installation WHERE id = $1`, uuidToString(createdInst.ID)).Scan(&remaining); err != nil {
+			t.Fatalf("verify deletion: %v", err)
+		}
+		if remaining != 0 {
+			t.Errorf("expected installation row gone after admin DELETE, got %d remaining", remaining)
+		}
+	})
+}
+
+// TestGitHubInstallationBroadcastRedaction guards Emacs' finding on PR #2886:
+// the realtime payloads we publish on installation create / uninstall must
+// not carry the numeric `installation_id`. The frontend uses these events
+// only to invalidate the installations query, so an admin client recovers
+// the management handle via the list endpoint — which already gates the
+// numeric id by role.
+func TestGitHubInstallationBroadcastRedaction(t *testing.T) {
+	inst := db.GithubInstallation{
+		InstallationID: 123456789,
+		AccountLogin:   "broadcast-acct",
+		AccountType:    "User",
+	}
+	got := githubInstallationToBroadcast(inst)
+	if got.InstallationID != nil {
+		t.Errorf("broadcast payload must omit installation_id, got %v", *got.InstallationID)
+	}
+	if got.AccountLogin != "broadcast-acct" {
+		t.Errorf("expected account_login preserved, got %q", got.AccountLogin)
+	}
+
+	// Sanity: the JSON encoding actually drops the field (omitempty + nil
+	// pointer). A future change to the response shape could re-introduce
+	// the field through a different name; the JSON check is the real
+	// assertion against the wire format clients see.
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal broadcast payload: %v", err)
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatalf("unmarshal broadcast payload: %v", err)
+	}
+	if _, present := generic["installation_id"]; present {
+		t.Errorf("installation_id leaked into broadcast JSON: %s", string(raw))
+	}
 }
