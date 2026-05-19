@@ -156,6 +156,25 @@ describe("onIssueLabelsChanged", () => {
     const detail = qc.getQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID));
     expect(detail?.labels).toEqual([labelB]);
   });
+
+  it("patches the Project Gantt cache so label filters react in place", () => {
+    const PROJECT_ID = "project-1";
+    qc.setQueryData<Issue[]>(issueKeys.projectGantt(WS_ID, PROJECT_ID), [
+      baseIssue,
+      otherIssue,
+    ]);
+
+    onIssueLabelsChanged(qc, WS_ID, ISSUE_ID, [labelB]);
+
+    const gantt = qc.getQueryData<Issue[]>(
+      issueKeys.projectGantt(WS_ID, PROJECT_ID),
+    );
+    expect(gantt?.find((i) => i.id === ISSUE_ID)?.labels).toEqual([labelB]);
+    // Other issues in the same cache must not have their labels mutated.
+    expect(gantt?.find((i) => i.id === OTHER_ISSUE_ID)?.labels).toEqual([
+      labelA,
+    ]);
+  });
 });
 
 describe("onIssueDeleted", () => {

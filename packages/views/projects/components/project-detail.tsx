@@ -180,7 +180,12 @@ function ProjectIssuesContent({
     [updateIssueMutation, t],
   );
 
-  if (projectIssues.length === 0) {
+  // Gantt has its own data source (scheduled-only) and its own empty axis —
+  // we never short-circuit it here, otherwise an unscheduled-but-non-empty
+  // project would surface a misleading "no issues" CTA. For Board/List the
+  // bucketed cache really is the ground truth, so an empty result means an
+  // empty project.
+  if (viewMode !== "gantt" && projectIssues.length === 0) {
     return (
       <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-3 text-muted-foreground">
         <ListTodo className="h-10 w-10 text-muted-foreground/40" />
@@ -252,6 +257,7 @@ function ProjectIssuesSurface({
   const creatorFilters = useViewStore((s) => s.creatorFilters);
   const labelFilters = useViewStore((s) => s.labelFilters);
   const usesAssigneeBoard = viewMode === "board" && grouping === "assignee";
+  const usesGantt = viewMode === "gantt";
   const assigneeGroupFilter = useMemo<AssigneeGroupedIssuesFilter>(
     () => ({
       ...filter,
@@ -269,27 +275,36 @@ function ProjectIssuesSurface({
     scope,
     assigneeGroupFilter,
   );
+  // Each view owns exactly one data source. Board/List ride the bucketed
+  // `myIssueListOptions` cache; the assignee-grouped board uses the grouped
+  // endpoint; Gantt has its own scheduled-only fetch. We gate `enabled` on
+  // the current view so switching to Gantt doesn't re-trigger the full
+  // per-status fetch in the background.
   const statusIssuesQuery = useQuery({
     ...myIssueListOptions(wsId, scope, filter),
-    enabled: !usesAssigneeBoard,
+    enabled: !usesAssigneeBoard && !usesGantt,
   });
   const assigneeGroupsQuery = useQuery({
     ...assigneeGroupsOptions,
     enabled: usesAssigneeBoard,
   });
-  // Gantt has its own data source — a single fetch of every scheduled issue
-  // in the project (server-side `scheduled=true` filter). Independent from
-  // the bucketed Board/List cache so it isn't bottlenecked by per-status
-  // pagination and reacts in isolation to WS updates that move issues into
-  // or out of the scheduled set.
+  // Gantt has its own data source — a single (paginated) fetch of every
+  // scheduled issue in the project. Independent from the bucketed Board/List
+  // cache so it isn't bottlenecked by per-status pagination and reacts in
+  // isolation to WS updates that move issues into or out of the scheduled
+  // set.
   const ganttIssuesQuery = useQuery({
     ...projectGanttIssuesOptions(wsId, projectId),
-    enabled: viewMode === "gantt",
+    enabled: usesGantt,
   });
-  const projectIssues = usesAssigneeBoard
+  const bucketedIssues = usesAssigneeBoard
     ? (assigneeGroupsQuery.data?.groups.flatMap((group) => group.issues) ?? [])
     : (statusIssuesQuery.data ?? []);
   const ganttIssues = ganttIssuesQuery.data ?? [];
+  // What the header empty-state check looks at depends on the view: Gantt
+  // would otherwise be blamed for an empty Board cache, even though it has
+  // its own (potentially non-empty) scheduled cache.
+  const projectIssues = usesGantt ? ganttIssues : bucketedIssues;
 
   return (
     <>

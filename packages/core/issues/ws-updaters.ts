@@ -114,6 +114,20 @@ export function onIssueLabelsChanged(
   qc.setQueryData<IssueLabelsResponse>(labelKeys.byIssue(wsId, issueId), (old) =>
     old ? { ...old, labels } : old,
   );
+  // Patch the Project Gantt caches in-place: the Gantt view applies
+  // `labelFilters` to the row data, so a stale `labels` array would silently
+  // hide or surface bars after another tab/agent attached or detached a
+  // label. Mutating in place (instead of invalidating) avoids a refetch of
+  // the entire scheduled set on every label toggle.
+  for (const [key, data] of qc.getQueriesData<Issue[]>({
+    queryKey: issueKeys.projectGanttAll(wsId),
+  })) {
+    if (!data) continue;
+    const next = data.map((issue) =>
+      issue.id === issueId ? { ...issue, labels } : issue,
+    );
+    qc.setQueryData<Issue[]>(key, next);
+  }
   qc.invalidateQueries({ queryKey: issueKeys.myAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
