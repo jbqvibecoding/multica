@@ -76,9 +76,12 @@ WHERE atq.issue_id = $1;
 -- the day the tokens actually landed. Powers the workspace dashboard's
 -- daily cost chart.
 --
--- The squad predicate inner-joins on `issue.assignee_type='squad' AND
--- issue.assignee_id = :squad_id` — i.e. "tasks whose issue is assigned
--- to this squad". The rollup variant below does NOT carry a squad
+-- The squad predicate is two-layered: (1) the issue must be assigned to
+-- the squad (`issue.assignee_type='squad' AND issue.assignee_id = :squad_id`),
+-- AND (2) the task's agent must be a member of that squad — either a
+-- `squad_member` row of type 'agent', or the squad's leader_id. A task
+-- run by a non-member agent on a squad-assigned issue is NOT counted in
+-- that squad's usage. The rollup variant below does NOT carry a squad
 -- dimension; the handler forces this raw-stream query whenever a squad
 -- filter is requested.
 SELECT
@@ -97,7 +100,13 @@ WHERE a.workspace_id = $1
   AND tu.created_at >= DATE_TRUNC('day', @since::timestamptz)
   AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
   AND (sqlc.narg('squad_id')::uuid IS NULL
-       OR (i.assignee_type = 'squad' AND i.assignee_id = sqlc.narg('squad_id')))
+       OR (i.assignee_type = 'squad' AND i.assignee_id = sqlc.narg('squad_id')
+           AND atq.agent_id IN (
+               SELECT sm.member_id FROM squad_member sm
+               WHERE sm.squad_id = sqlc.narg('squad_id') AND sm.member_type = 'agent'
+               UNION
+               SELECT s.leader_id FROM squad s WHERE s.id = sqlc.narg('squad_id')
+           )))
 GROUP BY DATE(tu.created_at), tu.model
 ORDER BY DATE(tu.created_at) DESC, tu.model;
 
@@ -123,7 +132,13 @@ WHERE a.workspace_id = $1
   AND tu.created_at >= DATE_TRUNC('day', @since::timestamptz)
   AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
   AND (sqlc.narg('squad_id')::uuid IS NULL
-       OR (i.assignee_type = 'squad' AND i.assignee_id = sqlc.narg('squad_id')))
+       OR (i.assignee_type = 'squad' AND i.assignee_id = sqlc.narg('squad_id')
+           AND atq.agent_id IN (
+               SELECT sm.member_id FROM squad_member sm
+               WHERE sm.squad_id = sqlc.narg('squad_id') AND sm.member_type = 'agent'
+               UNION
+               SELECT s.leader_id FROM squad s WHERE s.id = sqlc.narg('squad_id')
+           )))
 GROUP BY atq.agent_id, tu.model
 ORDER BY atq.agent_id, tu.model;
 
@@ -196,7 +211,13 @@ WHERE a.workspace_id = $1
   AND atq.completed_at >= DATE_TRUNC('day', @since::timestamptz)
   AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
   AND (sqlc.narg('squad_id')::uuid IS NULL
-       OR (i.assignee_type = 'squad' AND i.assignee_id = sqlc.narg('squad_id')))
+       OR (i.assignee_type = 'squad' AND i.assignee_id = sqlc.narg('squad_id')
+           AND atq.agent_id IN (
+               SELECT sm.member_id FROM squad_member sm
+               WHERE sm.squad_id = sqlc.narg('squad_id') AND sm.member_type = 'agent'
+               UNION
+               SELECT s.leader_id FROM squad s WHERE s.id = sqlc.narg('squad_id')
+           )))
 GROUP BY DATE(atq.completed_at)
 ORDER BY DATE(atq.completed_at) DESC;
 
@@ -225,6 +246,12 @@ WHERE a.workspace_id = $1
   AND atq.completed_at >= DATE_TRUNC('day', @since::timestamptz)
   AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
   AND (sqlc.narg('squad_id')::uuid IS NULL
-       OR (i.assignee_type = 'squad' AND i.assignee_id = sqlc.narg('squad_id')))
+       OR (i.assignee_type = 'squad' AND i.assignee_id = sqlc.narg('squad_id')
+           AND atq.agent_id IN (
+               SELECT sm.member_id FROM squad_member sm
+               WHERE sm.squad_id = sqlc.narg('squad_id') AND sm.member_type = 'agent'
+               UNION
+               SELECT s.leader_id FROM squad s WHERE s.id = sqlc.narg('squad_id')
+           )))
 GROUP BY atq.agent_id
 ORDER BY total_seconds DESC;

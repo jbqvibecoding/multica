@@ -613,9 +613,11 @@ func TestDashboardEndpoints_SquadFilter(t *testing.T) {
 		t.Fatalf("fetch agent: %v", err)
 	}
 
-	// Build a squad with the agent as leader (squad.leader_id requires a
-	// real agent reference; squad_member rows aren't needed because the
-	// dashboard query keys off issue.assignee_id, not membership).
+	// Build a squad with the agent as leader. Leader is implicitly a squad
+	// member for the filter, so no squad_member row is needed for it. A
+	// second agent is provisioned in this workspace but NOT added to the
+	// squad — it represents the "outsider" case that must be excluded
+	// from squad usage even when it runs against a squad-assigned issue.
 	var squadID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO squad (workspace_id, name, leader_id, creator_id)
@@ -625,6 +627,8 @@ func TestDashboardEndpoints_SquadFilter(t *testing.T) {
 		t.Fatalf("insert squad: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM squad WHERE id = $1`, squadID) })
+
+	outsiderAgentID := createHandlerTestAgent(t, "dashboard-squad-outsider", []byte("[]"))
 
 	mkIssueWithAssignee := func(assigneeType string, assigneeID any) string {
 		var id string
@@ -648,13 +652,13 @@ func TestDashboardEndpoints_SquadFilter(t *testing.T) {
 	started := now.Add(-30 * time.Minute)
 	completed := started.Add(10 * time.Minute) // 600s run
 
-	mkTaskWithUsage := func(issueID string, status string, tokens int64) {
+	mkTaskWithUsage := func(taskAgentID, issueID string, status string, tokens int64) {
 		var taskID string
 		if err := testPool.QueryRow(ctx, `
 			INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, started_at, completed_at, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, now())
 			RETURNING id
-		`, agentID, issueID, runtimeID, status, started, completed).Scan(&taskID); err != nil {
+		`, taskAgentID, issueID, runtimeID, status, started, completed).Scan(&taskID); err != nil {
 			t.Fatalf("insert task: %v", err)
 		}
 		if _, err := testPool.Exec(ctx, `
@@ -666,8 +670,14 @@ func TestDashboardEndpoints_SquadFilter(t *testing.T) {
 		t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
 	}
 
-	mkTaskWithUsage(squadIssueID, "completed", 1000)
-	mkTaskWithUsage(memberIssueID, "completed", 500)
+	mkTaskWithUsage(agentID, squadIssueID, "completed", 1000)
+	mkTaskWithUsage(agentID, memberIssueID, "completed", 500)
+	// Outsider agent runs on the squad-assigned issue. Per Jiayuan's
+	// definition, the squad filter scopes "squad-assigned issues AND tasks
+	// by squad-member/leader agents", so this 2000-token row must NOT
+	// appear under squad_id. If the SQL ever drops the agent-membership
+	// predicate, the <1500 / ==1 assertions below all trip.
+	mkTaskWithUsage(outsiderAgentID, squadIssueID, "completed", 2000)
 
 	type dailyRow struct {
 		Model       string `json:"model"`
@@ -701,7 +711,10 @@ func TestDashboardEndpoints_SquadFilter(t *testing.T) {
 		}
 	}
 
-	// by-agent — squad-scoped
+	// by-agent — squad-scoped. Also asserts the outsider agent (which ran
+	// 2000 tokens against the squad-assigned issue) is fully absent from
+	// the squad-filtered rows — the membership predicate must reject it
+	// at the row level, not just exclude its tokens from a sum.
 	{
 		w := httptest.NewRecorder()
 		testHandler.GetDashboardUsageByAgent(w, newRequest("GET", "/api/dashboard/usage/by-agent?days=1&squad_id="+squadID, nil))
@@ -713,17 +726,23 @@ func TestDashboardEndpoints_SquadFilter(t *testing.T) {
 			InputTokens int64  `json:"input_tokens"`
 		}
 		_ = json.NewDecoder(w.Body).Decode(&rows)
-		var total int64
+		var total, outsiderTotal int64
 		for _, r := range rows {
-			if r.AgentID == agentID {
+			switch r.AgentID {
+			case agentID:
 				total += r.InputTokens
+			case outsiderAgentID:
+				outsiderTotal += r.InputTokens
 			}
 		}
 		if total < 1000 {
-			t.Errorf("by-agent squad: expected >=1000 tokens for agent, got %d", total)
+			t.Errorf("by-agent squad: expected >=1000 tokens for leader agent, got %d", total)
 		}
 		if total >= 1500 {
-			t.Errorf("by-agent squad: filter leaked — expected <1500 tokens, got %d", total)
+			t.Errorf("by-agent squad: filter leaked — expected <1500 tokens for leader agent, got %d", total)
+		}
+		if outsiderTotal != 0 {
+			t.Errorf("by-agent squad: non-member agent must be excluded from squad filter, got %d tokens for outsider", outsiderTotal)
 		}
 	}
 

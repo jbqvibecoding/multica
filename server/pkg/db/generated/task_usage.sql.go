@@ -224,7 +224,14 @@ WHERE a.workspace_id = $1
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at >= DATE_TRUNC('day', $2::timestamptz)
   AND ($3::uuid IS NULL OR i.project_id = $3)
-  AND ($4::uuid IS NULL OR (i.assignee_type = 'squad' AND i.assignee_id = $4))
+  AND ($4::uuid IS NULL
+       OR (i.assignee_type = 'squad' AND i.assignee_id = $4
+           AND atq.agent_id IN (
+               SELECT sm.member_id FROM squad_member sm
+               WHERE sm.squad_id = $4 AND sm.member_type = 'agent'
+               UNION
+               SELECT s.leader_id FROM squad s WHERE s.id = $4
+           )))
 GROUP BY atq.agent_id
 ORDER BY total_seconds DESC
 `
@@ -244,10 +251,11 @@ type ListDashboardAgentRunTimeRow struct {
 }
 
 // Per-agent total task run time and task count for the workspace, optionally
-// scoped to a single project. Counts only terminal runs (completed or failed)
-// with both started_at and completed_at populated — queued/running tasks have
-// no finite duration. Anchored on completed_at so the window matches the
-// token cost window (which is anchored on tu.created_at, ~= completion time).
+// scoped to a single project AND/OR a single squad. Counts only terminal
+// runs (completed or failed) with both started_at and completed_at
+// populated — queued/running tasks have no finite duration. Anchored on
+// completed_at so the window matches the token cost window (which is
+// anchored on tu.created_at, ~= completion time).
 func (q *Queries) ListDashboardAgentRunTime(ctx context.Context, arg ListDashboardAgentRunTimeParams) ([]ListDashboardAgentRunTimeRow, error) {
 	rows, err := q.db.Query(ctx, listDashboardAgentRunTime, arg.WorkspaceID, arg.Since, arg.ProjectID, arg.SquadID)
 	if err != nil {
@@ -291,7 +299,14 @@ WHERE a.workspace_id = $1
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at >= DATE_TRUNC('day', $2::timestamptz)
   AND ($3::uuid IS NULL OR i.project_id = $3)
-  AND ($4::uuid IS NULL OR (i.assignee_type = 'squad' AND i.assignee_id = $4))
+  AND ($4::uuid IS NULL
+       OR (i.assignee_type = 'squad' AND i.assignee_id = $4
+           AND atq.agent_id IN (
+               SELECT sm.member_id FROM squad_member sm
+               WHERE sm.squad_id = $4 AND sm.member_type = 'agent'
+               UNION
+               SELECT s.leader_id FROM squad s WHERE s.id = $4
+           )))
 GROUP BY DATE(atq.completed_at)
 ORDER BY DATE(atq.completed_at) DESC
 `
@@ -311,12 +326,12 @@ type ListDashboardRunTimeDailyRow struct {
 }
 
 // Daily per-date run time + task counts for the workspace, optionally
-// scoped to a single project. Powers the workspace dashboard's "Time"
-// and "Tasks" metrics on the same toggle as Tokens / Cost. Bucketed by
-// completed_at (terminal time) — same anchor as ListDashboardAgentRunTime
-// so the day boundaries line up with the per-agent run-time card. Only
-// terminal tasks (completed or failed) with both started_at and
-// completed_at populated contribute.
+// scoped to a single project AND/OR a single squad. Powers the workspace
+// dashboard's "Time" and "Tasks" metrics on the same toggle as Tokens /
+// Cost. Bucketed by completed_at (terminal time) — same anchor as
+// ListDashboardAgentRunTime so the day boundaries line up with the
+// per-agent run-time card. Only terminal tasks (completed or failed)
+// with both started_at and completed_at populated contribute.
 func (q *Queries) ListDashboardRunTimeDaily(ctx context.Context, arg ListDashboardRunTimeDailyParams) ([]ListDashboardRunTimeDailyRow, error) {
 	rows, err := q.db.Query(ctx, listDashboardRunTimeDaily, arg.WorkspaceID, arg.Since, arg.ProjectID, arg.SquadID)
 	if err != nil {
@@ -358,7 +373,14 @@ LEFT JOIN issue i ON i.id = atq.issue_id
 WHERE a.workspace_id = $1
   AND tu.created_at >= DATE_TRUNC('day', $2::timestamptz)
   AND ($3::uuid IS NULL OR i.project_id = $3)
-  AND ($4::uuid IS NULL OR (i.assignee_type = 'squad' AND i.assignee_id = $4))
+  AND ($4::uuid IS NULL
+       OR (i.assignee_type = 'squad' AND i.assignee_id = $4
+           AND atq.agent_id IN (
+               SELECT sm.member_id FROM squad_member sm
+               WHERE sm.squad_id = $4 AND sm.member_type = 'agent'
+               UNION
+               SELECT s.leader_id FROM squad s WHERE s.id = $4
+           )))
 GROUP BY atq.agent_id, tu.model
 ORDER BY atq.agent_id, tu.model
 `
@@ -381,9 +403,10 @@ type ListDashboardUsageByAgentRow struct {
 }
 
 // Per-(agent, model) token aggregates for the workspace, optionally scoped
-// to a single project. Model dimension is preserved so the client can
-// compute cost from its per-model pricing table; the client folds rows by
-// agent for the "by agent" list on the dashboard.
+// to a single project AND/OR a single squad (see ListDashboardUsageDaily
+// for the squad-predicate rationale). Model dimension is preserved so the
+// client can compute cost from its per-model pricing table; the client
+// folds rows by agent for the "by agent" list on the dashboard.
 func (q *Queries) ListDashboardUsageByAgent(ctx context.Context, arg ListDashboardUsageByAgentParams) ([]ListDashboardUsageByAgentRow, error) {
 	rows, err := q.db.Query(ctx, listDashboardUsageByAgent, arg.WorkspaceID, arg.Since, arg.ProjectID, arg.SquadID)
 	if err != nil {
@@ -495,7 +518,14 @@ LEFT JOIN issue i ON i.id = atq.issue_id
 WHERE a.workspace_id = $1
   AND tu.created_at >= DATE_TRUNC('day', $2::timestamptz)
   AND ($3::uuid IS NULL OR i.project_id = $3)
-  AND ($4::uuid IS NULL OR (i.assignee_type = 'squad' AND i.assignee_id = $4))
+  AND ($4::uuid IS NULL
+       OR (i.assignee_type = 'squad' AND i.assignee_id = $4
+           AND atq.agent_id IN (
+               SELECT sm.member_id FROM squad_member sm
+               WHERE sm.squad_id = $4 AND sm.member_type = 'agent'
+               UNION
+               SELECT s.leader_id FROM squad s WHERE s.id = $4
+           )))
 GROUP BY DATE(tu.created_at), tu.model
 ORDER BY DATE(tu.created_at) DESC, tu.model
 `
@@ -518,11 +548,20 @@ type ListDashboardUsageDailyRow struct {
 }
 
 // Daily per-(date, model) token aggregates for the workspace, optionally
-// scoped to a single project via sqlc.narg('project_id'). Bucketed by
+// scoped to a single project AND/OR a single squad. Bucketed by
 // tu.created_at (token-production time) to match GetWorkspaceUsageByDay,
 // so a task that queues one day and finishes the next is attributed to
 // the day the tokens actually landed. Powers the workspace dashboard's
 // daily cost chart.
+//
+// The squad predicate is two-layered: (1) the issue must be assigned to
+// the squad (`issue.assignee_type='squad' AND issue.assignee_id = :squad_id`),
+// AND (2) the task's agent must be a member of that squad — either a
+// `squad_member` row of type 'agent', or the squad's leader_id. A task
+// run by a non-member agent on a squad-assigned issue is NOT counted in
+// that squad's usage. The rollup variant below does NOT carry a squad
+// dimension; the handler forces this raw-stream query whenever a squad
+// filter is requested.
 func (q *Queries) ListDashboardUsageDaily(ctx context.Context, arg ListDashboardUsageDailyParams) ([]ListDashboardUsageDailyRow, error) {
 	rows, err := q.db.Query(ctx, listDashboardUsageDaily, arg.WorkspaceID, arg.Since, arg.ProjectID, arg.SquadID)
 	if err != nil {
