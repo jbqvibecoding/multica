@@ -26,6 +26,7 @@ import type {
 } from "@multica/core/types";
 import { api } from "@/data/api";
 import { issueKeys } from "@/data/queries/issues";
+import { inboxKeys } from "@/data/queries/inbox";
 import { useAuthStore } from "@/data/auth-store";
 import { useWorkspaceStore } from "@/data/workspace-store";
 
@@ -366,7 +367,8 @@ export function useDetachLabel(issueId: string) {
  *
  * Invalidates:
  *  - issueKeys.myAll(wsId)        my-issues list (all three scopes)
- *  - ["inbox", wsId]              inbox (assignment notification if any)
+ *  - inboxKeys.all(wsId)          inbox (assignment notification if any) —
+ *                                 prefix-matches the inbox list key
  */
 export function useCreateIssue() {
   const qc = useQueryClient();
@@ -376,7 +378,7 @@ export function useCreateIssue() {
     mutationFn: (body: CreateIssueRequest) => api.createIssue(body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: issueKeys.myAll(wsId) });
-      qc.invalidateQueries({ queryKey: ["inbox", wsId] });
+      qc.invalidateQueries({ queryKey: inboxKeys.all(wsId) });
     },
   });
 }

@@ -2,13 +2,21 @@ import { queryOptions } from "@tanstack/react-query";
 import { api } from "@/data/api";
 
 /**
- * Inbox query — keyed on wsId so switching workspaces auto-invalidates the
- * cache (TQ sees a new key and refetches). Same pattern as web/desktop's
- * inboxKeys.list(wsId) in packages/core/inbox/queries.ts.
+ * Inbox cache key factory.
+ *
+ * Shape mirrors web's `packages/core/inbox/queries.ts` — `["inbox", wsId, "list"]`
+ * — so cross-platform mental model stays the same. Keying on wsId means
+ * workspace switches naturally invalidate (TQ sees a new key and refetches).
  */
+export const inboxKeys = {
+  all: (wsId: string | null) => ["inbox", wsId] as const,
+  list: (wsId: string | null) =>
+    [...inboxKeys.all(wsId), "list"] as const,
+};
+
 export const inboxListOptions = (wsId: string | null) =>
   queryOptions({
-    queryKey: ["inbox", wsId] as const,
+    queryKey: inboxKeys.list(wsId),
     queryFn: ({ signal }) => api.listInbox({ signal }),
     enabled: !!wsId,
   });

@@ -443,6 +443,12 @@ class ApiClient {
     return this.fetch<InboxItem>(`/api/inbox/${id}/archive`, { method: "POST" });
   }
 
+  async markAllInboxRead(): Promise<{ count: number }> {
+    return this.fetch<{ count: number }>("/api/inbox/mark-all-read", {
+      method: "POST",
+    });
+  }
+
   async archiveAllInbox(): Promise<{ count: number }> {
     return this.fetch<{ count: number }>("/api/inbox/archive-all", {
       method: "POST",

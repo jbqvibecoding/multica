@@ -1,39 +1,44 @@
 /**
- * Left-swipe-to-archive wrapper for inbox rows.
+ * Left-swipe-to-reveal-Archive wrapper for inbox rows.
  *
  * iOS pattern reference: Mail.app / Linear iOS / Things — a destructive
- * red Archive action revealed by a leftward drag, with auto-trigger on
- * full swipe past threshold so the user doesn't have to release-then-tap.
+ * red Archive action revealed by a leftward drag. **Reveal-only, no
+ * auto-fire**: the previous version archived on full swipe past threshold,
+ * which felt aggressive (no peek, easy to trigger by accident on a fast
+ * vertical scroll). Mail.app / Linear require an explicit tap on the
+ * revealed action; we now match that. A medium haptic fires once when the
+ * row crosses the action width during the drag so the gesture still feels
+ * confirmed.
  *
  * Why ReanimatedSwipeable (not the legacy Swipeable): RNGH 2.20+ ships the
  * Reanimated-driven implementation that integrates cleanly with the
  * existing reanimated@4 install and runs the swipe on the UI thread (the
- * legacy version uses Animated, which jankcs on heavy lists). The
+ * legacy version uses Animated, which janks on heavy lists). The
  * gesture-handler root is already mounted in apps/mobile/app/_layout.tsx.
  *
  * Behaviour notes:
- *   - `friction=2` slightly slows the drag so the action doesn't fire by
+ *   - `friction=2` slightly slows the drag so the action doesn't open by
  *     accident on a fast vertical scroll that catches some horizontal motion.
- *   - `rightThreshold=80` matches the visual width of the Archive button:
- *     past that, releasing auto-fires `onArchive`.
- *   - `onSwipeableOpen("right")` is the auto-trigger path. RNGH names the
- *     direction by where the action ENDS UP visible — `right` means
- *     `renderRightActions` is now exposed (the row slid left). Counter-
- *     intuitive but documented.
- *   - We `swipeable.close()` BEFORE calling onArchive so the row's exit
+ *   - `rightThreshold=80` is the open-detent — releasing past it keeps the
+ *     Archive button revealed; releasing short of it snaps closed. No
+ *     auto-archive on cross.
+ *   - We `swipeable.close()` before invoking onArchive so the row's exit
  *     from the FlatList (driven by the optimistic mutation flipping
  *     `archived: true`, which the parent's `deduplicateInboxItems` filters
- *     out) doesn't race the open animation. The row simply disappears from
- *     the list on next render — no fancy collapse needed for v1.
- *   - Tap on the revealed button is also supported: same flow.
+ *     out) doesn't race the spring close.
  */
 import { useRef } from "react";
 import { Pressable, View } from "react-native";
-import Animated, { type SharedValue } from "react-native-reanimated";
+import Animated, {
+  type SharedValue,
+  useAnimatedReaction,
+  runOnJS,
+} from "react-native-reanimated";
 import ReanimatedSwipeable, {
   type SwipeableMethods,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import type { InboxItem } from "@multica/core/types";
 import { Text } from "@/components/ui/text";
 import { InboxRow } from "./inbox-row";
@@ -61,28 +66,35 @@ export function SwipeableInboxRow({ item, onPress, onArchive }: Props) {
       ref={ref}
       friction={2}
       rightThreshold={ACTION_WIDTH}
-      renderRightActions={(_progress, _drag) => (
-        <ArchiveAction onPress={fireArchive} drag={_drag} />
+      renderRightActions={(_progress, drag) => (
+        <ArchiveAction onPress={fireArchive} drag={drag} />
       )}
-      onSwipeableOpen={(direction) => {
-        if (direction === "right") fireArchive();
-      }}
     >
       <InboxRow item={item} onPress={onPress} />
     </ReanimatedSwipeable>
   );
 }
 
-// `drag` is a SharedValue that goes from 0 → -ACTION_WIDTH as the row slides
-// left. We could use it to drive a parallax effect on the icon; v1 just
-// pins the icon to the right edge — sufficient for the intent.
 function ArchiveAction({
   onPress,
-  drag: _drag,
+  drag,
 }: {
   onPress: () => void;
   drag: SharedValue<number>;
 }) {
+  // One-shot haptic when the drag crosses the action width threshold.
+  // useAnimatedReaction runs on the UI thread; runOnJS bridges to the
+  // Haptics.impactAsync call which has to live on JS.
+  useAnimatedReaction(
+    () => drag.value <= -ACTION_WIDTH,
+    (crossed, prev) => {
+      if (crossed && !prev) {
+        runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Medium);
+      }
+    },
+    [],
+  );
+
   return (
     <Animated.View style={{ width: ACTION_WIDTH }}>
       <Pressable
