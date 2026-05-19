@@ -154,6 +154,28 @@ afterEach(() => {
 });
 
 describe("AttachmentPreviewModal — dispatch", () => {
+  it("renders an <img> centered in the modal for image content types", () => {
+    const att = makeAttachment({ filename: "shot.png", content_type: "image/png" });
+    render(<AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />);
+    const img = document.querySelector("img");
+    expect(img).toBeTruthy();
+    expect(img?.getAttribute("src")).toBe(att.download_url);
+    expect(img?.getAttribute("alt")).toBe(att.filename);
+  });
+
+  it("renders an <img> from a URL-only source for image filenames", () => {
+    const url = "https://cdn.example.test/orphan.png?Signature=s";
+    render(
+      <AttachmentPreviewModal
+        source={{ kind: "url", url, filename: "orphan.png" }}
+        open
+        onClose={() => {}}
+      />,
+    );
+    const img = document.querySelector("img");
+    expect(img?.getAttribute("src")).toBe(url);
+  });
+
   it("renders a PDF iframe pointing at the signed download URL", () => {
     const att = makeAttachment({ filename: "manual.pdf", content_type: "application/pdf" });
     render(<AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />);

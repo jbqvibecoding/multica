@@ -15,9 +15,9 @@
  * `openInNewTab` to add an app tab; web falls back to `window.open` against
  * the shareable URL.
  *
- * Mounted by AttachmentBlock when the attachment is HTML and the caller can
- * supply an `attachmentId` (the /content proxy is ID-keyed). For other kinds,
- * AttachmentBlock falls back to the shared AttachmentCard.
+ * Mounted by the unified `<Attachment>` dispatcher when the attachment is
+ * HTML and an `attachmentId` is resolvable (the /content proxy is ID-keyed).
+ * For other kinds, `<Attachment>` falls back to the shared AttachmentCard.
  *
  * Failure mode (413 / 415 / transport): we do not unmount the figure or fall
  * back to AttachmentCard chrome — standalone attachment lists filter URLs
