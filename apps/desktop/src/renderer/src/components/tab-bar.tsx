@@ -1,3 +1,4 @@
+import { Fragment, useEffect } from "react";
 import {
   Inbox,
   CircleUser,
@@ -8,6 +9,8 @@ import {
   Settings,
   X,
   Plus,
+  Pin,
+  PinOff,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -28,8 +31,22 @@ import {
   restrictToParentElement,
 } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuTrigger,
+} from "@multica/ui/components/ui/context-menu";
 import { cn } from "@multica/ui/lib/utils";
-import { useTabStore, useActiveGroup, resolveRouteIcon, type Tab } from "@/stores/tab-store";
+import {
+  useTabStore,
+  useActiveGroup,
+  resolveRouteIcon,
+  getActiveTab,
+  type Tab,
+} from "@/stores/tab-store";
 import { paths } from "@multica/core/paths";
 
 const TAB_ICONS: Record<string, LucideIcon> = {
@@ -42,9 +59,23 @@ const TAB_ICONS: Record<string, LucideIcon> = {
   Settings,
 };
 
-function SortableTabItem({ tab, isActive, isOnly }: { tab: Tab; isActive: boolean; isOnly: boolean }) {
+function SortableTabItem({
+  tab,
+  isActive,
+  isOnly,
+}: {
+  tab: Tab;
+  isActive: boolean;
+  /**
+   * True iff this is the only tab in the workspace. Hiding X on the last
+   * tab matches existing behavior and avoids the surprise of the store's
+   * last-tab reseed kicking in. Pinned tabs always hide X (D3c).
+   */
+  isOnly: boolean;
+}) {
   const setActiveTab = useTabStore((s) => s.setActiveTab);
   const closeTab = useTabStore((s) => s.closeTab);
+  const togglePin = useTabStore((s) => s.togglePin);
 
   const {
     attributes,
@@ -78,33 +109,48 @@ function SortableTabItem({ tab, isActive, isOnly }: { tab: Tab; isActive: boolea
     e.stopPropagation();
   };
 
-  return (
+  // Pinned tabs:
+  //   - icon-only (no title, no X) — Chrome style, RFC §3 D1v-i FINAL.
+  //   - narrow fixed width so they collapse to ~icon + padding.
+  //   - accent left border so they read as a distinct group even when the
+  //     bar is crowded and the inter-zone gap (rendered by TabBar) gets
+  //     hidden by horizontal scroll.
+  const showCloseButton = !tab.pinned && !isOnly;
+  const showTitle = !tab.pinned;
+
+  const tabButton = (
     <button
       ref={setNodeRef}
       style={style}
       {...attributes}
       {...listeners}
       onClick={handleClick}
+      aria-label={tab.pinned ? `${tab.title} (pinned)` : tab.title}
+      title={tab.pinned ? `${tab.title} (pinned)` : undefined}
       className={cn(
-        "group flex h-7 w-40 items-center gap-1.5 rounded-md px-2 text-xs transition-colors",
+        "group flex h-7 items-center gap-1.5 rounded-md text-xs transition-colors",
         "select-none cursor-default",
+        tab.pinned ? "w-8 justify-center px-1.5" : "w-40 px-2",
         isActive
           ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
           : "bg-sidebar-accent/50 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        tab.pinned && "border-l-2 border-l-primary/60",
         isDragging && "opacity-60",
       )}
     >
       {Icon && <Icon className="size-3.5 shrink-0" />}
-      <span
-        className="min-w-0 flex-1 overflow-hidden whitespace-nowrap text-left"
-        style={{
-          maskImage: "linear-gradient(to right, black calc(100% - 12px), transparent)",
-          WebkitMaskImage: "linear-gradient(to right, black calc(100% - 12px), transparent)",
-        }}
-      >
-        {tab.title}
-      </span>
-      {!isOnly && (
+      {showTitle && (
+        <span
+          className="min-w-0 flex-1 overflow-hidden whitespace-nowrap text-left"
+          style={{
+            maskImage: "linear-gradient(to right, black calc(100% - 12px), transparent)",
+            WebkitMaskImage: "linear-gradient(to right, black calc(100% - 12px), transparent)",
+          }}
+        >
+          {tab.title}
+        </span>
+      )}
+      {showCloseButton && (
         <span
           onClick={handleClose}
           onPointerDown={stopDragOnClose}
@@ -114,6 +160,37 @@ function SortableTabItem({ tab, isActive, isOnly }: { tab: Tab; isActive: boolea
         </span>
       )}
     </button>
+  );
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger render={tabButton} />
+      <ContextMenuContent>
+        <ContextMenuItem onClick={() => togglePin(tab.id)}>
+          {tab.pinned ? (
+            <>
+              <PinOff />
+              Unpin tab
+            </>
+          ) : (
+            <>
+              <Pin />
+              Pin tab
+            </>
+          )}
+          <ContextMenuShortcut>⌘⇧P</ContextMenuShortcut>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          variant="destructive"
+          disabled={tab.pinned || isOnly}
+          onClick={() => closeTab(tab.id)}
+        >
+          <X />
+          Close tab
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -142,9 +219,33 @@ function NewTabButton() {
   );
 }
 
+/**
+ * Listens for Cmd/Ctrl+Shift+P at the window level and toggles pin on the
+ * active tab. Mounted once by TabBar so it stays alive for the entire
+ * lifetime of the dashboard shell; unmounting on workspace switch would
+ * miss keypresses during the transition.
+ */
+function usePinShortcut() {
+  const togglePin = useTabStore((s) => s.togglePin);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!e.shiftKey) return;
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key !== "P" && e.key !== "p") return;
+      const active = getActiveTab(useTabStore.getState());
+      if (!active) return;
+      e.preventDefault();
+      togglePin(active.id);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [togglePin]);
+}
+
 export function TabBar() {
   const group = useActiveGroup();
   const moveTab = useTabStore((s) => s.moveTab);
+  usePinShortcut();
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -155,12 +256,17 @@ export function TabBar() {
   const tabs = group?.tabs ?? [];
   const activeTabId = group?.activeTabId ?? "";
   const tabIds = tabs.map((t) => t.id);
+  const pinnedCount = tabs.filter((t) => t.pinned).length;
+  const unpinnedCount = tabs.length - pinnedCount;
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
     const from = tabs.findIndex((t) => t.id === active.id);
     const to = tabs.findIndex((t) => t.id === over.id);
+    // The store clamps the destination to within the source tab's zone
+    // (pinned vs unpinned), so this call is safe even when the user tries
+    // to drag across the boundary — the tab will land at the boundary.
     if (from !== -1 && to !== -1) moveTab(from, to);
   };
 
@@ -173,13 +279,22 @@ export function TabBar() {
         onDragEnd={handleDragEnd}
       >
         <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
-          {tabs.map((tab) => (
-            <SortableTabItem
-              key={tab.id}
-              tab={tab}
-              isActive={tab.id === activeTabId}
-              isOnly={tabs.length === 1}
-            />
+          {tabs.map((tab, index) => (
+            <Fragment key={tab.id}>
+              <SortableTabItem
+                tab={tab}
+                isActive={tab.id === activeTabId}
+                isOnly={tabs.length === 1}
+              />
+              {tab.pinned &&
+                index === pinnedCount - 1 &&
+                unpinnedCount > 0 && (
+                  <div
+                    aria-hidden
+                    className="mx-1 h-4 w-px bg-border"
+                  />
+                )}
+            </Fragment>
           ))}
         </SortableContext>
       </DndContext>

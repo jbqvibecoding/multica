@@ -5,17 +5,40 @@ import { useEffect } from "react";
 // Shared in-memory state that the mocked tab store reads / mutates. The test
 // records every method call so we can assert openInNewTab does NOT activate
 // the new tab (i.e. setActiveTab is never invoked on the same-workspace path).
+type MockRouter = {
+  state: { location: { pathname: string } };
+  navigate: ReturnType<typeof vi.fn>;
+};
+
+type MockTab = {
+  id: string;
+  path: string;
+  pinned: boolean;
+  router: MockRouter;
+};
+
+function makeMockRouter(pathname: string): MockRouter {
+  return {
+    state: { location: { pathname } },
+    navigate: vi.fn(),
+  };
+}
+
 const state = vi.hoisted(() => ({
   activeWorkspaceSlug: "acme" as string | null,
   byWorkspace: {
     acme: {
       activeTabId: "tA",
-      tabs: [{ id: "tA", path: "/acme/issues" }],
+      tabs: [
+        {
+          id: "tA",
+          path: "/acme/issues",
+          pinned: false,
+          router: makeMockRouter("/acme/issues"),
+        },
+      ] as MockTab[],
     },
-  } as Record<
-    string,
-    { activeTabId: string; tabs: { id: string; path: string }[] }
-  >,
+  } as Record<string, { activeTabId: string; tabs: MockTab[] }>,
   openTab: vi.fn<(path: string, title?: string, icon?: string) => string>(),
   setActiveTab: vi.fn<(tabId: string) => void>(),
   switchWorkspace: vi.fn<(slug: string, openPath?: string) => void>(),
@@ -91,7 +114,14 @@ beforeEach(() => {
   state.byWorkspace = {
     acme: {
       activeTabId: "tA",
-      tabs: [{ id: "tA", path: "/acme/issues" }],
+      tabs: [
+        {
+          id: "tA",
+          path: "/acme/issues",
+          pinned: false,
+          router: makeMockRouter("/acme/issues"),
+        },
+      ],
     },
   };
   Object.defineProperty(window, "desktopAPI", {
@@ -167,6 +197,69 @@ describe("DesktopNavigationProvider.openInNewTab", () => {
     expect(state.switchWorkspace).toHaveBeenCalledWith("butter", "/butter/inbox");
     expect(state.openTab).not.toHaveBeenCalled();
     expect(state.setActiveTab).not.toHaveBeenCalled();
+  });
+});
+
+describe("DesktopNavigationProvider.push with pinned active tab", () => {
+  function pinActive(pathname: string) {
+    state.byWorkspace.acme.tabs[0] = {
+      id: "tA",
+      path: pathname,
+      pinned: true,
+      router: makeMockRouter(pathname),
+    };
+  }
+
+  it("redirects push to a new foreground tab when pathname differs", () => {
+    pinActive("/acme/issues");
+    let adapter: ReturnType<typeof useNavigation> | null = null;
+    const Probe = captureAdapter((a) => {
+      adapter = a;
+    });
+    render(
+      <DesktopNavigationProvider>
+        <Probe />
+      </DesktopNavigationProvider>,
+    );
+    adapter!.push("/acme/projects");
+    expect(state.openTab).toHaveBeenCalledWith("/acme/projects", "/acme/projects", "File");
+    expect(state.setActiveTab).toHaveBeenCalledWith("tNew");
+  });
+
+  it("allows in-tab navigation when only search/hash changes", () => {
+    pinActive("/acme/issues");
+    let adapter: ReturnType<typeof useNavigation> | null = null;
+    const Probe = captureAdapter((a) => {
+      adapter = a;
+    });
+    render(
+      <DesktopNavigationProvider>
+        <Probe />
+      </DesktopNavigationProvider>,
+    );
+    adapter!.push("/acme/issues?filter=open");
+    // Pathname unchanged → pinned interception declines and falls through to
+    // the router's own navigate — openTab / setActiveTab must not fire.
+    expect(state.openTab).not.toHaveBeenCalled();
+    expect(state.setActiveTab).not.toHaveBeenCalled();
+  });
+
+  it("leaves cross-workspace push to the workspace switcher (not pin)", () => {
+    pinActive("/acme/issues");
+    let adapter: ReturnType<typeof useNavigation> | null = null;
+    const Probe = captureAdapter((a) => {
+      adapter = a;
+    });
+    render(
+      <DesktopNavigationProvider>
+        <Probe />
+      </DesktopNavigationProvider>,
+    );
+    adapter!.push("/butter/inbox");
+    // Cross-workspace push runs through tryRouteToOtherWorkspace before
+    // tryRouteToPinnedNewTab, so switchWorkspace wins.
+    expect(state.switchWorkspace).toHaveBeenCalledWith("butter", "/butter/inbox");
+    expect(state.openTab).not.toHaveBeenCalled();
   });
 });
 
