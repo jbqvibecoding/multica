@@ -54,9 +54,18 @@ import {
 interface Props {
   code: string;
   lang?: string;
+  /**
+   * When `false`, opts the code lines out of RN `<Text selectable>` so the
+   * UIKit long-press selection magnifier doesn't compete with an outer
+   * Pressable's onLongPress. Default true preserves the reader-surface
+   * behaviour (issue description / chat message code blocks where users
+   * expect to be able to copy via selection). See `Markdown.selectable`
+   * for the full rationale.
+   */
+  selectable?: boolean;
 }
 
-export function CodeBlock({ code, lang }: Props) {
+export function CodeBlock({ code, lang, selectable = true }: Props) {
   const { isDarkColorScheme } = useColorScheme();
   const theme = isDarkColorScheme ? SHIKI_THEME_DARK : SHIKI_THEME_LIGHT;
   const resolvedLang = resolveLang(lang);
@@ -80,28 +89,48 @@ export function CodeBlock({ code, lang }: Props) {
     <View className={CODE_BLOCK_CONTAINER_CLASS}>
       <CodeBlockHeader code={code} lang={lang} />
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        {lines ? <HighlightedCode lines={lines} /> : <PlainCode code={code} />}
+        {lines ? (
+          <HighlightedCode lines={lines} selectable={selectable} />
+        ) : (
+          <PlainCode code={code} selectable={selectable} />
+        )}
       </ScrollView>
     </View>
   );
 }
 
-function PlainCode({ code }: { code: string }) {
+function PlainCode({
+  code,
+  selectable,
+}: {
+  code: string;
+  selectable: boolean;
+}) {
   return (
-    <Text className={CODE_BLOCK_TEXT_CLASS} selectable>
+    <Text className={CODE_BLOCK_TEXT_CLASS} selectable={selectable}>
       {code}
     </Text>
   );
 }
 
-function HighlightedCode({ lines }: { lines: HighlightedLine[] }) {
+function HighlightedCode({
+  lines,
+  selectable,
+}: {
+  lines: HighlightedLine[];
+  selectable: boolean;
+}) {
   // One outer <Text> per line so RN treats each line as its own typographic
   // run. An empty line gets a single space so it still occupies a row's
   // height — otherwise blank lines collapse to zero pixels.
   return (
     <View>
       {lines.map((line, i) => (
-        <Text key={i} className={CODE_BLOCK_TEXT_CLASS} selectable>
+        <Text
+          key={i}
+          className={CODE_BLOCK_TEXT_CLASS}
+          selectable={selectable}
+        >
           {line.tokens.length === 0
             ? " "
             : line.tokens.map((t, j) => (

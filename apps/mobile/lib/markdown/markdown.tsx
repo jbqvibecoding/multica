@@ -58,9 +58,23 @@ interface Props {
    * doesn't understand the mc: scheme and the image fails to load.
    */
   attachments?: Attachment[];
+  /**
+   * When `false`, kills the UIKit-native long-press selection (the magnifier
+   * + selection handles) inside both the enriched prose and the in-house
+   * `<CodeBlock>` content. Required for surfaces that own a competing
+   * `onLongPress` gesture — most notably the comment card, whose long-press
+   * opens the comment action sheet. Without `selectable={false}` the OS
+   * gesture and the Pressable both fire and the selection magnifier
+   * appears on top of the action sheet (Element X PR #1584 documents the
+   * identical bug in a Matrix client).
+   *
+   * Default is `true` for reader surfaces (issue description, chat message
+   * bodies) where users expect to be able to select and copy text natively.
+   */
+  selectable?: boolean;
 }
 
-export function Markdown({ content, attachments }: Props) {
+export function Markdown({ content, attachments, selectable = true }: Props) {
   const wsSlug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
   const markdownStyle = useMarkdownStyle();
 
@@ -115,10 +129,18 @@ export function Markdown({ content, attachments }: Props) {
                 markdown={seg.content}
                 markdownStyle={markdownStyle}
                 onLinkPress={onLinkPress}
+                selectable={selectable}
               />
             );
           case "code":
-            return <CodeBlock key={i} code={seg.code} lang={seg.lang} />;
+            return (
+              <CodeBlock
+                key={i}
+                code={seg.code}
+                lang={seg.lang}
+                selectable={selectable}
+              />
+            );
           case "image":
             return (
               <MarkdownImage

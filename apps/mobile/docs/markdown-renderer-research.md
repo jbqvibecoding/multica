@@ -376,7 +376,7 @@ Apple HIG Dynamic Type (Body 17pt, Title 3 20pt, Title 2 22pt, Title 1
 
 | Element | Mobile class | Rationale |
 |---|---|---|
-| Body / paragraph | `text-sm leading-6` | 14px on 24px line ≈ 1.71 — generous for CJK glyph height; HIG Body Compact |
+| Body / paragraph | `text-sm leading-6` | 14px on 24px line ≈ 1.71 — generous for CJK glyph height; HIG Body Compact. See *Body lineHeight stays at 24* below for why a 2026-05-19 reduction attempt was reverted |
 | Inline code | `text-sm font-mono` | Match body size, mono variant — chip identification is by bg, not size |
 | Block code | `text-sm font-mono` | Same as inline |
 | H1 | `text-xl font-bold` (20px) | HIG Title 3 — markdown H1 inside an issue card is structural, not a screen title |
@@ -384,9 +384,36 @@ Apple HIG Dynamic Type (Body 17pt, Title 3 20pt, Title 2 22pt, Title 1
 | H3 | `text-base font-semibold` (16px) | Body+1 |
 | H4–H6 | `text-sm font-semibold` | Body, weight to differentiate |
 
-`leading-5` (20px on 14px = 1.43) is **too tight for CJK paragraphs** —
-PingFang SC has taller glyphs than SF, so 1.5+ is the published Apple
-recommendation. `leading-6` is the right default.
+**Body lineHeight stays at 24 (ratio 1.71) — 1.43 reduction reverted same day**
+
+A 2026-05-19 attempt to reduce `MD_LINE.body` from 24 to 20 (ratio 1.71
+→ 1.43) — to fix the inline-code chip's top-heavy visual artifact — was
+**reverted on the same day** after additional research falsified the
+hypothesis.
+
+Falsifying evidence:
+
+1. **Discord / Slack / Telegram / Mattermost mobile all use background +
+   monospace** for inline code with NO visible top-heavy artifact —
+   confirming the artifact is not an RN+iOS platform-wide problem.
+2. **Upstream issue [#255](https://github.com/software-mansion-labs/react-native-enriched-markdown/issues/255)**
+   on `react-native-enriched-markdown` (filed 2026-04-20) is the same
+   problem reported by another user: enriched applies hardcoded inline-
+   code padding that cannot be turned off via `markdownStyle`. Maintainer
+   has not responded, no ETA.
+
+So the chip is the **library's bug**, not a `lineHeight` configuration
+problem. Reducing `lineHeight` shrinks the absolute padding but does
+NOT change the top:bottom asymmetry ratio (still ≈ 4:1 either way),
+because the ratio is set by enriched's internal padding distribution.
+Reducing `lineHeight` only costs us CJK leading without solving the
+artifact.
+
+`leading-6` (1.71) restored. The original PingFang SC argument applies:
+CJK glyphs are taller than SF and benefit from ≥1.5 leading.
+
+**Accepted as a known limitation, tracked in
+`docs/markdown-rendering-adr.md` → Known limitations.**
 
 ### List bullet column width
 
@@ -422,6 +449,29 @@ correctness one.
 - **2026-05-09 (engine actually shipped)** — Replaced planned `react-native-marked` adapter with a hand-rolled walker on raw `marked@18` (`render-block.tsx` / `render-inline.tsx` / `ast.ts`, ~450 LOC). Reason: `react-native-marked` v7.0 (Jun 2025) removed the `CustomToken` API needed for inline mention chips; v8 added React-component embedding back but custom inline tokenization is still constrained. Walker keeps total control over mention chips, file cards, and the inline-image-promotion AST pre-pass.
 - **2026-05-09 (Shiki + Expo Go assumption dropped)** — Project moved to dev client (custom native build) — Expo Go-compatible constraint no longer applies. Adopted `react-native-shiki-engine` (JSI Oniguruma + native engine) with reused web Shiki theme JSON (`github-light` / `github-dark`) for **byte-identical syntax highlighting** between web and mobile. Highlighter singleton lives in `lib/markdown/shiki.ts`, prewarmed at app boot.
 - **2026-05-09 (inline code chip incident)** — Shipped 3-layer styling (`bg + border + opacity`) ported from web. CJK paragraphs catastrophically broke into 6-7 lines per chip. Root cause: RN's 10-year-old nested-Text limitation (issues #10775 / #45925 / #6728 — `borderWidth` / `padding` / `margin` are not part of `NSAttributedString`'s expressible attribute set, so iOS TextKit either drops them or breaks the run out of inline flow; New Arch / Fabric flipped the failure mode from "silent drop" to "force break"). CJK amplified the symptom because UAX #14 / Kinsoku treat every ideograph as a soft-break opportunity around the non-flowable run. Fix: drop border + padding from inline code, bump background opacity from `/5` to `/10` to compensate. **Encoded the rule in *RN native rendering constraints* above so this never happens again.**
+
+- **2026-05-19 (RNR theme integration + enriched-markdown dark-default trap)** — Migrated `markdown-style.ts` from static hex constants to a `useMarkdownStyle()` hook driven by `THEME[scheme]` (from `lib/theme.ts`, mirroring `global.css` CSS variables). Non-prose layers (`CodeBlock` / `MarkdownImage`) were already className-driven and only needed dark-mode `--code-surface` (changed from light-mirror `240 4% 92%` to `240 4% 18%`). Two waves of dark-mode bugs uncovered the same root cause:
+
+  **First wave** (visible breakage in `MUL-2395` dark screenshot): list items rendered as black-on-black (invisible); inline code showed a white-ish empty outline (no fill).
+
+  **Root cause**: `react-native-enriched-markdown@0.5.0`'s `normalizeMarkdownStyle.js` defines `DEFAULT_NORMALIZED_STYLE` — a frozen table of ~30 hardcoded LIGHT-mode color defaults (`#1F2937` text, `#E01E5A` inline code, `#FDF2F4` inline code bg, `#F8D7DA` inline code border, `#4B5563` blockquote, `#FFFFFF` table even row, `#000000` checked task text, etc.). User `markdownStyle` is merged on top — **fields you don't pass keep the hardcoded light value**. There is no "inherit from parent" fallback at the native md4c layer.
+
+  The "white outline" on inline code in dark mode was the default `#F8D7DA` (pale pink) border showing against `#0a0a0a` page background.
+
+  **Fix**: read the entire `normalizeMarkdownStyle.js` file (~264 LOC), enumerate every color field, set every one explicitly from `THEME[scheme]`. Currently covered: `paragraph/h1–h6/blockquote/list/codeBlock/link/strong/em/strikethrough/underline/code/thematicBreak/table/taskList/math/inlineMath`. Also pass `lineHeight` explicitly on every heading because enriched's heading lineHeight defaults are calibrated to its larger default fontSizes (h1: 36pt for 30pt fontSize) — using mobile's smaller heading fontSizes (h1: 20pt) without overriding lineHeight produces awkwardly tall lines.
+
+  **Rule to encode for future maintainers**:
+
+  > **Any time `EnrichedMarkdownText`'s `markdownStyle` is extended, audit `normalizeMarkdownStyle.js` in `node_modules/react-native-enriched-markdown/lib/module/` and verify every color field has an explicit `THEME[scheme]` override. Do NOT assume "inherit". When upgrading enriched-markdown (v0.6+), re-run the audit — new fields ship hardcoded light defaults too.**
+
+  Inline code background alpha: `12%` on dark is invisible against `#0a0a0a`; bumped to `40%` (`#9ca3af66`) in dark mode while keeping `12%` in light. Border forced to `transparent` to kill the default pink stroke.
+
+- **2026-05-19 (lineHeight 24→20 attempted then REVERTED same day)** — Saw inline-code chip with very top-heavy padding in #MUL-2397 screenshot. Initial hypothesis: paragraph `lineHeight 24` + iOS TextKit descender-flush glyph positioning produced ~4.3:1 top:bottom space ratio. Reduced `MD_LINE.body` 24→20 to compress. **Reverted same day after research falsified the hypothesis**:
+  - Discord / Slack / Telegram / Mattermost mobile all use background + monospace inline code with no visible top-heavy artifact ([Discord markdown guide](https://gist.github.com/matthewzring/9f7bbfd102003963f9be7dbcf7d40e51), [Slack docs](https://slack.com/help/articles/202288908-Format-your-messages), [Telegram entities API](https://core.telegram.org/api/entities)) — confirming the artifact is NOT a RN+iOS structural limitation
+  - Upstream [`react-native-enriched-markdown#255`](https://github.com/software-mansion-labs/react-native-enriched-markdown/issues/255) — same user-reported problem, maintainer unresponsive — confirms enriched applies hardcoded inline-code padding that can't be turned off
+  - Reducing `lineHeight` shrinks absolute padding but doesn't shift the asymmetry ratio (enriched's internal padding distribution is what sets the ratio). Net effect of the reduction: cost CJK leading, didn't fix the chip
+  - Restored `MD_LINE.body: 24`. Heading values restored: h1 28, h2 24, h3 22, h4/h5 20, h6 18.
+  - **Lesson**: when a chip artifact appears in enriched-markdown output, check upstream issues BEFORE proposing a numeric fix on our side. Chip layout is library-controlled, not consumer-controlled. Now tracked in `docs/markdown-rendering-adr.md` → Known limitations.
 
 ---
 
