@@ -19,8 +19,6 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
-  Platform,
-  Pressable,
   RefreshControl,
   ScrollView,
   View,
@@ -28,9 +26,9 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ionicons } from "@expo/vector-icons";
 import { Text } from "@/components/ui/text";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { ProjectHeaderCard } from "@/components/project/project-header-card";
 import { ProjectPropertiesSection } from "@/components/project/project-properties-section";
 import { ProjectRelatedIssues } from "@/components/project/project-related-issues";
@@ -132,13 +130,11 @@ export default function ProjectDetail() {
           headerBackTitle: "Back",
           headerRight: project
             ? () => (
-                <Pressable onPress={onPressMore} className="px-2 py-1">
-                  <Ionicons
-                    name="ellipsis-horizontal"
-                    size={20}
-                    color={Platform.OS === "ios" ? "#0a84ff" : "#71717a"}
-                  />
-                </Pressable>
+                <IconButton
+                  name="ellipsis-horizontal"
+                  onPress={onPressMore}
+                  accessibilityLabel="Project actions"
+                />
               )
             : undefined,
         }}

@@ -10,7 +10,7 @@
  * useActorLookup so it shares the same lookup with my-issues + issue detail.
  */
 import { Pressable, View } from "react-native";
-import Svg, { Path } from "react-native-svg";
+import { Ionicons } from "@expo/vector-icons";
 import type { Project } from "@multica/core/types";
 import { Text } from "@/components/ui/text";
 import { ActorAvatar } from "@/components/ui/actor-avatar";
@@ -21,6 +21,8 @@ import {
   projectStatusLabel,
 } from "@/lib/project-status";
 import { useActorLookup } from "@/data/use-actor-name";
+import { useColorScheme } from "@/lib/use-color-scheme";
+import { THEME } from "@/lib/theme";
 
 interface Props {
   project: Project;
@@ -127,17 +129,13 @@ function Separator() {
 }
 
 function Chevron() {
+  const { colorScheme } = useColorScheme();
   return (
-    <Svg width={14} height={14} viewBox="0 0 16 16">
-      <Path
-        d="M6 4 L10 8 L6 12"
-        fill="none"
-        stroke="#a1a1aa"
-        strokeWidth={1.5}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </Svg>
+    <Ionicons
+      name="chevron-forward"
+      size={14}
+      color={THEME[colorScheme].mutedForeground}
+    />
   );
 }
 

@@ -19,6 +19,8 @@ import { Text } from "@/components/ui/text";
 import { projectResourcesOptions } from "@/data/queries/projects";
 import { useDeleteProjectResource } from "@/data/mutations/projects";
 import { useWorkspaceStore } from "@/data/workspace-store";
+import { useColorScheme } from "@/lib/use-color-scheme";
+import { THEME } from "@/lib/theme";
 
 interface Props {
   projectId: string;
@@ -99,6 +101,7 @@ function ResourceRow({
   onPress: () => void;
   onLongPress: () => void;
 }) {
+  const { colorScheme } = useColorScheme();
   return (
     <Pressable
       onPress={onPress}
@@ -109,7 +112,7 @@ function ResourceRow({
       <Ionicons
         name={iconFor(resource.resource_type)}
         size={16}
-        color="#71717a"
+        color={THEME[colorScheme].mutedForeground}
       />
       <View className="flex-1">
         <Text className="text-sm text-foreground" numberOfLines={1}>

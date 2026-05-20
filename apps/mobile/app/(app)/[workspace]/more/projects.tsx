@@ -16,16 +16,15 @@ import { useCallback, useMemo } from "react";
 import {
   ActivityIndicator,
   FlatList,
-  Pressable,
   RefreshControl,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { Stack, router } from "expo-router";
-import Svg, { Line } from "react-native-svg";
 import { Text } from "@/components/ui/text";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { ProjectRow } from "@/components/project/project-row";
 import { projectListOptions } from "@/data/queries/projects";
 import { useWorkspaceStore } from "@/data/workspace-store";
@@ -101,31 +100,11 @@ export default function ProjectsPage() {
 
 function PlusButton({ onPress }: { onPress: () => void }) {
   return (
-    <Pressable
+    <IconButton
+      name="add"
       onPress={onPress}
-      className="size-9 items-center justify-center rounded-md active:bg-secondary"
-    >
-      <Svg width={18} height={18} viewBox="0 0 16 16">
-        <Line
-          x1="8"
-          y1="3"
-          x2="8"
-          y2="13"
-          stroke="#0a84ff"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        />
-        <Line
-          x1="3"
-          y1="8"
-          x2="13"
-          y2="8"
-          stroke="#0a84ff"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        />
-      </Svg>
-    </Pressable>
+      accessibilityLabel="New project"
+    />
   );
 }
 
