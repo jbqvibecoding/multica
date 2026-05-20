@@ -1,26 +1,27 @@
 /**
- * Issues belonging to a project — List + Board view modes.
+ * Issues belonging to a project — status-grouped list.
+ *
+ * Mobile intentionally does NOT implement web's Board (kanban) view, only
+ * the List form. Reasons:
+ *   - Phone screens are too narrow to show ≥3 status columns at once, so
+ *     kanban loses its core "see all-statuses pipeline at a glance" value;
+ *     users end up swiping between near-empty columns.
+ *   - Major mobile task apps (Linear iOS, Things, Apple Reminders) don't
+ *     ship kanban either — list with status grouping is the established
+ *     small-screen pattern for the same data.
+ *   - This is a UI divergence, NOT semantic divergence (per
+ *     mobile/CLAUDE.md "Behavioral parity"): same issues, same status
+ *     enum, same 6 BOARD_STATUSES grouping as web — only the layout
+ *     differs. UI may diverge when semantics agree.
  *
  * Status grouping uses full `BOARD_STATUSES` (six visible groups, cancelled
  * excluded) to match web `packages/views/projects/components/project-detail.tsx`.
  * The earlier mobile-only "Open / Done" two-bucket layout was a parity
  * violation: same status enum value would appear in different visible
  * groups on mobile vs web. Cancelled is omitted on both clients.
- *
- * View modes:
- *   - List: vertical SectionList-shape — status header + `IssueRow` per
- *     issue. Default; matches my-issues / Issues default.
- *   - Board: horizontal column scroll, one column per status header +
- *     stacked rows. Linear iOS / Things use the same small-screen kanban
- *     pattern (vertical stacking inside each column, horizontal navigation
- *     between columns). Columns are 280pt wide — enough room for an
- *     identifier + a truncated title at typical iPhone widths.
- *
- * View mode is local component state — no cross-screen need, no Zustand.
  */
-import { useMemo, useState } from "react";
-import { ScrollView, View } from "react-native";
-import SegmentedControl from "@react-native-segmented-control/segmented-control";
+import { useMemo } from "react";
+import { View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import type { Issue, IssueStatus } from "@multica/core/types";
@@ -33,8 +34,6 @@ import { projectIssuesOptions } from "@/data/queries/projects";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { BOARD_STATUSES, STATUS_LABEL } from "@/lib/issue-status";
 
-type ViewMode = "list" | "board";
-
 interface Props {
   projectId: string;
 }
@@ -45,8 +44,6 @@ export function ProjectRelatedIssues({ projectId }: Props) {
   const { data, isLoading, error, refetch } = useQuery(
     projectIssuesOptions(wsId, projectId),
   );
-
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
 
   const byStatus = useMemo(() => {
     const m = new Map<IssueStatus, Issue[]>();
@@ -88,35 +85,6 @@ export function ProjectRelatedIssues({ projectId }: Props) {
 
   return (
     <View>
-      <View className="px-4 pt-2 pb-2">
-        <SegmentedControl
-          values={["List", "Board"]}
-          selectedIndex={viewMode === "list" ? 0 : 1}
-          onChange={(e) =>
-            setViewMode(
-              e.nativeEvent.selectedSegmentIndex === 0 ? "list" : "board",
-            )
-          }
-        />
-      </View>
-      {viewMode === "list" ? (
-        <ListView byStatus={byStatus} onPressIssue={navigateToIssue} />
-      ) : (
-        <BoardView byStatus={byStatus} onPressIssue={navigateToIssue} />
-      )}
-    </View>
-  );
-}
-
-function ListView({
-  byStatus,
-  onPressIssue,
-}: {
-  byStatus: Map<IssueStatus, Issue[]>;
-  onPressIssue: (id: string) => void;
-}) {
-  return (
-    <View>
       {BOARD_STATUSES.map((status) => {
         const issues = byStatus.get(status) ?? [];
         if (issues.length === 0) return null;
@@ -127,69 +95,13 @@ function ListView({
               <IssueRow
                 key={issue.id}
                 issue={issue}
-                onPress={() => onPressIssue(issue.id)}
+                onPress={() => navigateToIssue(issue.id)}
               />
             ))}
           </View>
         );
       })}
     </View>
-  );
-}
-
-function BoardView({
-  byStatus,
-  onPressIssue,
-}: {
-  byStatus: Map<IssueStatus, Issue[]>;
-  onPressIssue: (id: string) => void;
-}) {
-  // Outer detail screen is a vertical ScrollView; this nests a horizontal
-  // ScrollView. Different axes — RN handles the gesture priority fine.
-  // Per-column scroll is delegated to the outer vertical scroll (no inner
-  // FlatList) so the user's vertical thumb gesture flows through to the
-  // detail page's primary scroll.
-  return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerClassName="px-4 gap-3 pb-2"
-    >
-      {BOARD_STATUSES.map((status) => {
-        const issues = byStatus.get(status) ?? [];
-        return (
-          <View
-            key={status}
-            className="w-72 bg-secondary/30 rounded-lg overflow-hidden"
-          >
-            <View className="flex-row items-center gap-2 px-3 py-2 bg-secondary/60">
-              <StatusIcon status={status} size={14} />
-              <Text className="text-xs uppercase tracking-wider text-muted-foreground font-medium flex-1">
-                {STATUS_LABEL[status]}
-              </Text>
-              <Text className="text-xs text-muted-foreground/60">
-                {issues.length}
-              </Text>
-            </View>
-            {issues.length === 0 ? (
-              <View className="px-3 py-6">
-                <Text className="text-xs text-muted-foreground/60 text-center">
-                  Empty
-                </Text>
-              </View>
-            ) : (
-              issues.map((issue) => (
-                <IssueRow
-                  key={issue.id}
-                  issue={issue}
-                  onPress={() => onPressIssue(issue.id)}
-                />
-              ))
-            )}
-          </View>
-        );
-      })}
-    </ScrollView>
   );
 }
 
