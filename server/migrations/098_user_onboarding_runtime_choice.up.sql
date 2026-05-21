@@ -1,33 +1,16 @@
--- Persists the user's Step 3 runtime choice across sessions so the
--- workspace-entry onboarding init is a pure function of user state.
+-- v3 reverts the v2 attempt at persisting Step 3 runtime choice on the user
+-- row. The two columns were added in an earlier draft of this migration
+-- (wip/onboarding-v2, never shipped to production) and the design moved to
+-- a frontend Zustand transient store instead — onboarding state collapses
+-- back to the single `onboarded_at` field.
 --
--- Before this column, the "did the user pick a runtime?" signal lived
--- only in React state inside StepRuntimeConnect — exit Step 3 and the
--- choice was gone. The workspace OnboardingHelperModal had to fall back
--- to `runtimeListOptions(ws).data?.[0]` (pick the first runtime in the
--- workspace), which silently discards the user's selection if they have
--- more than one. Storing the choice here lets the modal accept it as a
--- prop and stay a dumb component.
---
--- onboarding_runtime_id and onboarding_runtime_skipped together encode
--- one of three legal states (see CHECK constraint):
---   (NULL,   false) — Step 3 not yet completed
---   (<uuid>, false) — user picked this runtime in Step 3
---   (NULL,   true)  — user explicitly skipped Step 3
--- The (<uuid>, true) combination is rejected by the constraint.
---
--- ON DELETE SET NULL: if the chosen runtime row is later deleted (daemon
--- removed, runtime evicted), the field degrades to NULL — the user
--- effectively returns to "not yet completed" rather than holding a
--- dangling reference.
+-- IF EXISTS guards make this safe whether the original v2 migration ran
+-- locally or not.
+ALTER TABLE "user"
+    DROP CONSTRAINT IF EXISTS user_onboarding_runtime_choice_check;
 
 ALTER TABLE "user"
-    ADD COLUMN IF NOT EXISTS onboarding_runtime_id UUID NULL
-        REFERENCES agent_runtime(id) ON DELETE SET NULL;
+    DROP COLUMN IF EXISTS onboarding_runtime_skipped;
 
 ALTER TABLE "user"
-    ADD COLUMN IF NOT EXISTS onboarding_runtime_skipped BOOLEAN NOT NULL DEFAULT FALSE;
-
-ALTER TABLE "user"
-    ADD CONSTRAINT user_onboarding_runtime_choice_check
-    CHECK (NOT (onboarding_runtime_id IS NOT NULL AND onboarding_runtime_skipped = TRUE));
+    DROP COLUMN IF EXISTS onboarding_runtime_id;

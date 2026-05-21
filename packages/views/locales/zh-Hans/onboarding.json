@@ -179,34 +179,52 @@
     "add_more_hint": "随时添加更多智能体。一支专长各异的小团队胜过一个万能选手。",
     "docs_link": "创建第一个智能体 →"
   },
-  "onboarding_helper_modal": {
-    "title": "认识 Multica Helper",
-    "subtitle": "你在这个工作区的第一个 agent。挑一件事交给它当作第一个任务——它会在 issue 里接手并回复你。",
-    "cards": {
-      "intro": {
-        "title": "介绍一下 Multica",
-        "subtitle": "让 Helper 给你讲讲 Multica 是什么，以及怎么和 agent 协作。",
-        "prompt": "给我介绍一下 Multica。讲讲这个工作区是什么、agent 在这里能做什么、我应该先试什么。"
-      },
-      "assign": {
-        "title": "教我怎么把 issue 派给 agent",
-        "subtitle": "Helper 会用这个 issue 当例子，演示 assignee、@mention 和评论串怎么用。",
-        "prompt": "教我怎么把一个 issue 派给 agent，还有 @mention 是怎么工作的。直接用这个 issue 当例子讲清楚。"
-      },
-      "second_agent": {
-        "title": "帮我再创建一个 agent",
-        "subtitle": "看 Helper 用 multica CLI 从模板创建一个新队友。",
-        "prompt": "帮我在这个工作区再创建一个 agent。先问我想要什么类型的 agent，然后用 multica CLI 帮我建出来。"
+  "welcome_after_onboarding": {
+    "loading_helper": "正在为你准备 Helper……",
+    "error_title": "准备失败",
+    "error_generic": "出了点问题，请重试。",
+    "retry": "重试",
+    "dismiss_error": "知道了",
+    "runtime": {
+      "title": "认识 Multica Helper",
+      "subtitle": "你在这个工作区的第一个 agent。挑一件事交给它当作第一个任务——它会在 issue 里接手并回复你。",
+      "helper_description": "内置的 workspace 助手，回答 Multica 问题、执行 CLI 操作。",
+      "cards": {
+        "intro": {
+          "title": "介绍一下 Multica",
+          "subtitle": "让 Helper 给你讲讲 Multica 是什么，以及怎么和 agent 协作。",
+          "prompt": "给我介绍一下 Multica。讲讲这个工作区是什么、agent 在这里能做什么、我应该先试什么。"
+        },
+        "assign": {
+          "title": "教我怎么把 issue 派给 agent",
+          "subtitle": "Helper 会用这个 issue 当例子，演示 assignee、@mention 和评论串怎么用。",
+          "prompt": "教我怎么把一个 issue 派给 agent，还有 @mention 是怎么工作的。直接用这个 issue 当例子讲清楚。"
+        },
+        "second_agent": {
+          "title": "帮我再创建一个 agent",
+          "subtitle": "看 Helper 用 multica CLI 从模板创建一个新队友。",
+          "prompt": "帮我在这个工作区再创建一个 agent。先问我想要什么类型的 agent，然后用 multica CLI 帮我建出来。"
+        }
       }
     },
-    "dismiss_error": "知道了",
-    "error_generic": "无法创建 Multica Helper，请检查网络后重试。"
-  },
-  "workspace_init": {
-    "setting_up": "正在为你准备工作区……",
-    "error_title": "准备工作区失败",
-    "error_generic": "为你准备工作区时出错了。",
-    "retry": "重试"
+    "skip": {
+      "loading": "正在为你准备工作区……",
+      "title": "欢迎来到 Multica！",
+      "subtitle": "我们为你创建了两个任务，帮助你进行下一步操作。",
+      "got_it": "知道了",
+      "status_in_progress": "进行中",
+      "status_todo": "待办",
+      "cards": {
+        "install_runtime": {
+          "title": "连接一个运行时",
+          "subtitle": "安装 Codex 或 Kimi 让 agent 上线。"
+        },
+        "create_agent": {
+          "title": "创建你的第一个 agent",
+          "subtitle": "运行时上线后，把第一个 agent 建出来。"
+        }
+      }
+    }
   },
   "step_workspace": {
     "eyebrow_first": "你的第一个工作区",

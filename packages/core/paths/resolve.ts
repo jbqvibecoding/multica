@@ -3,27 +3,27 @@ import { useAuthStore } from "../auth";
 import { paths } from "./paths";
 
 /**
- * Priority (workspace-presence first):
- *   has workspace                          → /<first.slug>/issues  (modal handles un-onboarded)
- *   no workspace + !hasOnboarded           → /onboarding
- *   no workspace + hasOnboarded            → /workspaces/new
+ * Priority (onboarded-first):
+ *   !hasOnboarded               → /onboarding
+ *   hasOnboarded + workspace[0] → /<first.slug>/issues
+ *   hasOnboarded + no workspace → /workspaces/new
  *
- * Why workspace-presence is the primary axis (not `onboarded_at`):
- * `CreateWorkspace` no longer marks the user as onboarded — that mark
- * is reserved for the `BootstrapOnboardingRuntime` path that creates
- * the user's first Multica Helper (triggered by the workspace
- * `OnboardingHelperModal`). So a user can legitimately land in the
- * "has workspace but !onboarded" mid-flow state. Routing them back to
- * /onboarding would loop them through Welcome → questionnaire steps
- * they've already completed; routing them to the workspace lets the
- * blocking modal pick up exactly where they left off (the modal stays
- * up until `onboarded_at != null`).
+ * V3 invariant: `onboarded_at != null` is the single source of truth for
+ * "may access /<slug>/*". The web workspace layout and the desktop App.tsx
+ * overlay decision both gate on this — sending an un-onboarded user
+ * straight to /issues would just be redirected back to /onboarding by
+ * the layout gate, costing a navigation round-trip. Check onboarded
+ * first.
  *
- * `AcceptInvitation` still marks onboarded — invitees skip the helper
- * modal entirely, so they hit `hasOnboarded` true and route normally.
+ * In v3 "has workspace but !onboarded" is physically rare (a user can
+ * only land in that state by closing the app between Step 2 and Step 3
+ * — both questionnaire and runtime picker steps run after workspace
+ * creation but before CompleteOnboarding). OnboardingFlow's Step 2
+ * already recognizes existing workspaces and offers "Continue with
+ * {name}", so the recovery is seamless.
  *
- * Callers that need invitation-aware routing (callback / login) handle the
- * "un-onboarded with pending invites" branch themselves before calling
+ * Callers that need invitation-aware routing (callback / login) handle
+ * the "un-onboarded with pending invites" branch themselves before calling
  * this resolver — this resolver only deals with the post-invite-check
  * destination.
  */
@@ -31,14 +31,12 @@ export function resolvePostAuthDestination(
   workspaces: Workspace[],
   hasOnboarded: boolean,
 ): string {
-  const first = workspaces[0];
-  if (first) {
-    // Workspace exists → land in it regardless of onboarded status.
-    // The workspace-layer OnboardingHelperModal will fire if needed.
-    return paths.workspace(first.slug).issues();
-  }
   if (!hasOnboarded) {
     return paths.onboarding();
+  }
+  const first = workspaces[0];
+  if (first) {
+    return paths.workspace(first.slug).issues();
   }
   return paths.newWorkspace();
 }

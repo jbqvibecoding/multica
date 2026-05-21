@@ -1,8 +1,6 @@
-ALTER TABLE "user"
-    DROP CONSTRAINT IF EXISTS user_onboarding_runtime_choice_check;
-
-ALTER TABLE "user"
-    DROP COLUMN IF EXISTS onboarding_runtime_skipped;
-
-ALTER TABLE "user"
-    DROP COLUMN IF EXISTS onboarding_runtime_id;
+-- Intentionally empty. The v3 design (frontend Zustand welcome-store) replaced
+-- the v2 persisted runtime choice columns; rolling this migration back has no
+-- meaningful target state. Re-introducing the columns would also re-introduce
+-- the deleted CHECK constraint, OnboardingService.MarkComplete plumbing, and
+-- PATCH /api/me/onboarding runtime field handling — none of which exist in
+-- the current code.

@@ -426,32 +426,21 @@ func (h *Handler) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Accepting an invite marks the invitee as onboarded — they are
-	// joining an existing workspace someone else set up, so the workspace
-	// OnboardingHelperModal must NOT fire for them. (CreateWorkspace no
-	// longer marks onboarded — the workspace owner's mark happens later
-	// in BootstrapOnboardingRuntime when they pick a starter task via the
-	// modal — but invitees skip that whole flow.)
-	//
-	// DO NOT REMOVE this MarkComplete call without simultaneously updating
-	// the OnboardingHelperModal trigger in packages/views/workspace/ to also
-	// exclude invited-only members. The current trigger is purely
-	// `me.onboarded_at == null`, so dropping this mark would pop the modal
-	// in front of an invitee in someone else's workspace.
-	//
-	// Seeding the install-runtime issue is now owned by
-	// `<WorkspaceOnboardingInit />` (via EnsureOnboardingContent), so we pass
-	// a zero workspace id to skip the seed step inside MarkComplete. The
-	// invitee reaches the workspace shell next; the init component runs the
-	// fallback seed once they get there.
-	completion, err := h.OnboardingService.MarkComplete(r.Context(), qtx, user.ID, pgtype.UUID{})
+	// Accepting an invite marks the invitee as onboarded. The web /
+	// desktop workspace layout has a hard onboarded_at gate; without
+	// this mark, an invitee landing on their first workspace would be
+	// redirected back to /onboarding to fill out a questionnaire for a
+	// workspace someone else already set up. Atomic with CreateMember so
+	// `member` and `onboarded_at` can never disagree. COALESCE in
+	// MarkUserOnboarded keeps the call idempotent for users joining
+	// additional workspaces after their first.
+	firstOnboardingCompletion := !user.OnboardedAt.Valid
+	onboardedUser, err := qtx.MarkUserOnboarded(r.Context(), user.ID)
 	if err != nil {
-		slog.Warn("accept invitation: mark complete failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", uuidToString(accepted.WorkspaceID))...)
+		slog.Warn("accept invitation: mark user onboarded failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", uuidToString(accepted.WorkspaceID))...)
 		writeError(w, http.StatusInternalServerError, "failed to mark user onboarded")
 		return
 	}
-	onboardedUser := completion.User
-	firstOnboardingCompletion := completion.FirstCompletion
 
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to accept invitation")

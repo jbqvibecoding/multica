@@ -130,8 +130,6 @@ import {
   GroupedIssuesResponseSchema,
   ListIssuesResponseSchema,
   ListWebhookDeliveriesResponseSchema,
-  OnboardingNoRuntimeBootstrapResponseSchema,
-  OnboardingRuntimeBootstrapResponseSchema,
   SquadMemberStatusListResponseSchema,
   SubscribersListSchema,
   TimelineEntriesSchema,
@@ -163,30 +161,6 @@ export interface LoginResponse {
   token: string;
   user: User;
 }
-
-export interface OnboardingRuntimeBootstrapResponse {
-  workspace_id: string;
-  agent_id: string;
-  issue_id: string;
-}
-
-const EMPTY_ONBOARDING_RUNTIME_BOOTSTRAP_RESPONSE:
-  OnboardingRuntimeBootstrapResponse = {
-  workspace_id: "",
-  agent_id: "",
-  issue_id: "",
-};
-
-export interface OnboardingNoRuntimeBootstrapResponse {
-  workspace_id: string;
-  issue_id: string;
-}
-
-const EMPTY_ONBOARDING_NO_RUNTIME_BOOTSTRAP_RESPONSE:
-  OnboardingNoRuntimeBootstrapResponse = {
-  workspace_id: "",
-  issue_id: "",
-};
 
 export class ApiError extends Error {
   readonly status: number;
@@ -399,47 +373,6 @@ export class ApiClient {
     });
   }
 
-  async bootstrapOnboardingRuntime(payload: {
-    workspace_id: string;
-    runtime_id: string;
-    /** Optional: user's chosen first task from the workspace
-     *  OnboardingHelperModal. Becomes the seeded onboarding issue's
-     *  description; server falls back to a generic message when omitted. */
-    starter_prompt?: string;
-  }): Promise<OnboardingRuntimeBootstrapResponse> {
-    const raw = await this.fetch<unknown>(
-      "/api/me/onboarding/runtime-bootstrap",
-      {
-        method: "POST",
-        body: JSON.stringify(payload),
-      },
-    );
-    return parseWithFallback(
-      raw,
-      OnboardingRuntimeBootstrapResponseSchema,
-      EMPTY_ONBOARDING_RUNTIME_BOOTSTRAP_RESPONSE,
-      { endpoint: "POST /api/me/onboarding/runtime-bootstrap" },
-    );
-  }
-
-  async bootstrapOnboardingNoRuntime(payload: {
-    workspace_id: string;
-  }): Promise<OnboardingNoRuntimeBootstrapResponse> {
-    const raw = await this.fetch<unknown>(
-      "/api/me/onboarding/no-runtime-bootstrap",
-      {
-        method: "POST",
-        body: JSON.stringify(payload),
-      },
-    );
-    return parseWithFallback(
-      raw,
-      OnboardingNoRuntimeBootstrapResponseSchema,
-      EMPTY_ONBOARDING_NO_RUNTIME_BOOTSTRAP_RESPONSE,
-      { endpoint: "POST /api/me/onboarding/no-runtime-bootstrap" },
-    );
-  }
-
   async joinCloudWaitlist(payload: {
     email: string;
     reason?: string;
@@ -452,14 +385,6 @@ export class ApiClient {
 
   async patchOnboarding(payload: {
     questionnaire?: Record<string, unknown>;
-    // runtime_id / runtime_skipped persist the user's Step 3 selection so
-    // the workspace-entry init can read it (the prior design discarded the
-    // choice when Step 3 unmounted). Either field may be omitted — server
-    // preserves existing values via COALESCE. Sending both `runtime_id` and
-    // `runtime_skipped: true` is rejected as a 400 (CHECK constraint
-    // mirror).
-    runtime_id?: string;
-    runtime_skipped?: boolean;
   }): Promise<User> {
     return this.fetch("/api/me/onboarding", {
       method: "PATCH",
@@ -1149,23 +1074,6 @@ export class ApiClient {
 
   async leaveWorkspace(workspaceId: string): Promise<void> {
     await this.fetch(`/api/workspaces/${workspaceId}/leave`, {
-      method: "POST",
-    });
-  }
-
-  /**
-   * Idempotent "make sure this workspace has the install-runtime seed
-   * issue" hook used by `<WorkspaceOnboardingInit />`'s branch 0 fallback.
-   * Server gates on "workspace has no runtime yet" and dedupes by title via
-   * advisory lock; calling repeatedly is safe.
-   *
-   * Returns `created=false` when nothing was seeded (workspace already had
-   * a runtime, or a live issue with the canonical title exists). The
-   * frontend doesn't need to act on the response — the WS EventIssueCreated
-   * fired server-side updates the issue list.
-   */
-  async ensureOnboardingContent(workspaceId: string): Promise<{ created: boolean }> {
-    return this.fetch(`/api/workspaces/${workspaceId}/ensure-onboarding-content`, {
       method: "POST",
     });
   }

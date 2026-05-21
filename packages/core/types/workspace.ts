@@ -39,20 +39,6 @@ export interface User {
    */
   onboarding_questionnaire: Record<string, unknown>;
   /**
-   * The runtime the user picked in Step 3 of onboarding. Null when the user
-   * either hasn't reached Step 3 yet or explicitly skipped it. The workspace-
-   * entry init reads this together with `onboarding_runtime_skipped` to pick
-   * which initialization branch to run (Modal for the chosen runtime vs.
-   * silent install-runtime seeding).
-   */
-  onboarding_runtime_id: string | null;
-  /**
-   * True when the user picked "Skip" in Step 3. The combination of
-   * `(onboarding_runtime_id, onboarding_runtime_skipped)` encodes the
-   * three-state machine; (UUID, true) is rejected by a DB CHECK constraint.
-   */
-  onboarding_runtime_skipped: boolean;
-  /**
    * Legacy column from the removed starter-content dialog. The column is
    * still written to (always 'imported' for new accounts after the
    * mark-onboarded paths run) so older desktop builds — which still render

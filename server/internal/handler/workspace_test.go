@@ -36,16 +36,16 @@ func TestCreateWorkspace_RejectsReservedSlug(t *testing.T) {
 	}
 }
 
-// TestCreateWorkspace_DoesNotMarkOnboarded guards the new onboarding
-// contract: creating a workspace MUST leave user.onboarded_at NULL so the
-// workspace OnboardingHelperModal can fire when the user lands in the
-// new workspace UI. The previous behavior atomically set onboarded_at
-// inside CreateWorkspace (workspace.go:207); this test makes the new
+// TestCreateWorkspace_DoesNotMarkOnboarded guards the onboarding
+// contract: creating a workspace MUST leave user.onboarded_at NULL so
+// the route guard in apps/web/app/[workspaceSlug]/layout.tsx (and the
+// desktop App.tsx overlay decision) can redirect the un-onboarded user
+// back to /onboarding to finish Step 3. The previous behavior atomically
+// set onboarded_at inside CreateWorkspace; this test makes the new
 // invariant explicit and regression-protected.
 //
-// AcceptInvitation, BootstrapOnboardingRuntime, BootstrapOnboardingNoRuntime
-// and the CompleteOnboarding skip-paths still mark onboarded — those are
-// guarded by their own tests.
+// CompleteOnboarding (Step 3 exit) and AcceptInvitation are the only
+// remaining handlers that flip onboarded_at.
 func TestCreateWorkspace_DoesNotMarkOnboarded(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -77,7 +77,7 @@ func TestCreateWorkspace_DoesNotMarkOnboarded(t *testing.T) {
 		t.Fatalf("lookup user: %v", err)
 	}
 	if onboardedAt != nil {
-		t.Fatalf("CreateWorkspace marked user as onboarded; expected NULL, got %q. The workspace OnboardingHelperModal relies on this staying NULL until BootstrapOnboardingRuntime fires.", *onboardedAt)
+		t.Fatalf("CreateWorkspace marked user as onboarded; expected NULL, got %q. The workspace layout hard gate relies on this staying NULL until Step 3 CompleteOnboarding fires.", *onboardedAt)
 	}
 }
 

@@ -49,23 +49,17 @@ var supportedLanguages = map[string]struct{}{
 }
 
 type UserResponse struct {
-	ID                       string          `json:"id"`
-	Name                     string          `json:"name"`
-	Email                    string          `json:"email"`
-	AvatarURL                *string         `json:"avatar_url"`
-	Language                 *string         `json:"language"`
-	OnboardedAt              *string         `json:"onboarded_at"`
-	OnboardingQuestionnaire  json.RawMessage `json:"onboarding_questionnaire"`
-	// OnboardingRuntimeID and OnboardingRuntimeSkipped expose the user's
-	// Step 3 selection so the workspace-entry init can decide which branch
-	// to run (selected runtime → Modal; explicit skip → seed install-runtime
-	// issue; both unset → either still in Step 3 or never finished it).
-	OnboardingRuntimeID      *string         `json:"onboarding_runtime_id"`
-	OnboardingRuntimeSkipped bool            `json:"onboarding_runtime_skipped"`
-	StarterContentState      *string         `json:"starter_content_state"`
-	ProfileDescription       string          `json:"profile_description"`
-	CreatedAt                string          `json:"created_at"`
-	UpdatedAt                string          `json:"updated_at"`
+	ID                      string          `json:"id"`
+	Name                    string          `json:"name"`
+	Email                   string          `json:"email"`
+	AvatarURL               *string         `json:"avatar_url"`
+	Language                *string         `json:"language"`
+	OnboardedAt             *string         `json:"onboarded_at"`
+	OnboardingQuestionnaire json.RawMessage `json:"onboarding_questionnaire"`
+	StarterContentState     *string         `json:"starter_content_state"`
+	ProfileDescription      string          `json:"profile_description"`
+	CreatedAt               string          `json:"created_at"`
+	UpdatedAt               string          `json:"updated_at"`
 }
 
 // MaxProfileDescriptionLen caps the user-supplied profile_description body.
@@ -82,25 +76,18 @@ func userToResponse(u db.User) UserResponse {
 	if len(q) == 0 {
 		q = []byte("{}")
 	}
-	var runtimeIDPtr *string
-	if u.OnboardingRuntimeID.Valid {
-		s := uuidToString(u.OnboardingRuntimeID)
-		runtimeIDPtr = &s
-	}
 	return UserResponse{
-		ID:                       uuidToString(u.ID),
-		Name:                     u.Name,
-		Email:                    u.Email,
-		AvatarURL:                textToPtr(u.AvatarUrl),
-		Language:                 textToPtr(u.Language),
-		OnboardedAt:              timestampToPtr(u.OnboardedAt),
-		OnboardingQuestionnaire:  json.RawMessage(q),
-		OnboardingRuntimeID:      runtimeIDPtr,
-		OnboardingRuntimeSkipped: u.OnboardingRuntimeSkipped,
-		StarterContentState:      textToPtr(u.StarterContentState),
-		ProfileDescription:       u.ProfileDescription,
-		CreatedAt:                timestampToString(u.CreatedAt),
-		UpdatedAt:                timestampToString(u.UpdatedAt),
+		ID:                      uuidToString(u.ID),
+		Name:                    u.Name,
+		Email:                   u.Email,
+		AvatarURL:               textToPtr(u.AvatarUrl),
+		Language:                textToPtr(u.Language),
+		OnboardedAt:             timestampToPtr(u.OnboardedAt),
+		OnboardingQuestionnaire: json.RawMessage(q),
+		StarterContentState:     textToPtr(u.StarterContentState),
+		ProfileDescription:      u.ProfileDescription,
+		CreatedAt:               timestampToString(u.CreatedAt),
+		UpdatedAt:               timestampToString(u.UpdatedAt),
 	}
 }
 

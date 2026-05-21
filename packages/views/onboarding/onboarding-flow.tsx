@@ -9,9 +9,8 @@ import { useAuthStore } from "@multica/core/auth";
 import {
   completeOnboarding,
   ONBOARDING_STEP_ORDER,
-  recordOnboardingRuntimeChoice,
-  recordOnboardingRuntimeSkipped,
   saveQuestionnaire,
+  useWelcomeStore,
   type OnboardingStep,
   type QuestionnaireAnswers,
 } from "@multica/core/onboarding";
@@ -58,6 +57,7 @@ function mergeQuestionnaire(
 }
 
 /**
+/**
  * Shell's onComplete contract:
  *   onComplete(workspace?, issueId?) — if an issue id is present, navigate
  *   straight into that onboarding issue; otherwise navigate into the
@@ -66,13 +66,18 @@ function mergeQuestionnaire(
  * Three exit shapes feed onComplete:
  *   - Skip-existing (Welcome): completeOnboarding marks onboarded; navigate
  *     to the existing workspace's issue list.
- *   - Runtime-skipped (no runtime on Step 3): bootstrapNoRuntimeOnboarding
- *     marks onboarded + seeds install-runtime issue; navigate to that issue.
- *   - Runtime-connected (runtime picked on Step 3): NO bootstrap call —
- *     just store the runtime and navigate to the workspace. The user
- *     hits the workspace OnboardingHelperModal (which gates on
- *     `me.onboarded_at == null`); selecting a starter prompt there is what
- *     finally calls bootstrapRuntimeOnboarding + marks onboarded.
+ *   - Runtime-skipped (no runtime on Step 3): completeOnboarding marks
+ *     onboarded; we push a {choice:"skip"} welcome signal and navigate
+ *     to the workspace. The welcome hook in the workspace shell creates
+ *     the install-runtime / create-agent guide issues on landing.
+ *   - Runtime-connected (runtime picked on Step 3): completeOnboarding
+ *     marks onboarded; we push a {choice:"runtime", runtimeId} welcome
+ *     signal and navigate. The welcome hook creates the Multica Helper
+ *     agent on the picked runtime and shows the starter-card Modal.
+ *
+ * V3 contract: this file never touches createAgent / createIssue. The
+ * "what runs in the workspace shell after onboarding" decision is in
+ * `packages/views/workspace/welcome-after-onboarding.tsx`.
  */
 export function OnboardingFlow({
   onComplete,
@@ -204,26 +209,30 @@ export function OnboardingFlow({
   const handleRuntimeNext = useCallback(
     async (rt: AgentRuntime | null) => {
       if (!workspace) return;
-      // Step 3 is now pure intent capture: PATCH the user's choice into
-      // `users.onboarding_runtime_id` or `users.onboarding_runtime_skipped`,
-      // then navigate. All side effects (creating the Helper agent, seeding
-      // the install-runtime issue, marking onboarded) happen in the workspace
-      // shell via `<WorkspaceOnboardingInit />`, which reads those two fields
-      // off `me` and runs exactly one branch. This is the asymmetric Skip /
-      // Connect split being collapsed — both paths PATCH only, neither calls
-      // bootstrap from here.
+      // Step 3 in v3 does exactly two things:
+      //   1. Mark onboarded server-side (the workspace layout hard gate
+      //      will redirect us back to /onboarding without this).
+      //   2. Park a transient welcome signal for the workspace shell to
+      //      consume on the next render, telling it what the user chose.
+      // Helper-agent creation and starter-issue creation happen in the
+      // workspace shell's welcome hook, AFTER navigation, via the generic
+      // createAgent / createIssue endpoints.
       try {
-        if (rt) {
-          await recordOnboardingRuntimeChoice(rt.id);
-        } else {
-          await recordOnboardingRuntimeSkipped();
-        }
+        await completeOnboarding(
+          rt ? "full" : "runtime_skipped",
+          workspace.id,
+        );
       } catch (err) {
         toast.error(
           err instanceof Error ? err.message : t(($) => $.errors.skip_failed),
         );
         return;
       }
+      useWelcomeStore.getState().set({
+        workspaceId: workspace.id,
+        choice: rt ? "runtime" : "skip",
+        ...(rt ? { runtimeId: rt.id } : {}),
+      });
       onComplete(workspace, undefined);
     },
     [workspace, onComplete, t],

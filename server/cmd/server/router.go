@@ -308,9 +308,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Patch("/api/me", h.UpdateMe)
 		r.Patch("/api/me/onboarding", h.PatchOnboarding)
 		r.Post("/api/me/onboarding/complete", h.CompleteOnboarding)
+		r.Post("/api/me/onboarding/cloud-waitlist", h.JoinCloudWaitlist)
+		// DEPRECATED — shim routes for desktop < v3 during the rollout
+		// window. v3 frontend creates the Helper agent + starter issue
+		// via generic CreateAgent / CreateIssue and only calls /complete
+		// here. Remove once X-Client-Version telemetry confirms zero
+		// pre-v3 desktops are still calling these. Handlers live in
+		// server/internal/handler/onboarding_shim.go.
 		r.Post("/api/me/onboarding/runtime-bootstrap", h.BootstrapOnboardingRuntime)
 		r.Post("/api/me/onboarding/no-runtime-bootstrap", h.BootstrapOnboardingNoRuntime)
-		r.Post("/api/me/onboarding/cloud-waitlist", h.JoinCloudWaitlist)
 		r.Post("/api/cli-token", h.IssueCliToken)
 		r.Post("/api/upload-file", h.UploadFile)
 		r.Post("/api/feedback", h.CreateFeedback)
@@ -331,11 +337,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// the handler strips the management handle and adds a
 					// can_manage hint so the UI can gate connect/disconnect.
 					r.Get("/github/installations", h.ListGitHubInstallations)
-					// Idempotent install-runtime issue seeding — called by the
-					// workspace-entry init when a member lands on a runtime-less
-					// workspace. Self-gates on "no runtime + no live duplicate
-					// issue" so repeated calls are cheap no-ops.
-					r.Post("/ensure-onboarding-content", h.EnsureOnboardingContent)
 				})
 				// Admin-level access
 				r.Group(func(r chi.Router) {

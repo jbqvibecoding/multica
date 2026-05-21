@@ -38,6 +38,20 @@
   animation: onboarding-enter 0.4s ease both;
 }
 
+/* Welcome-after-onboarding Modal: emoji pops in with two quick scale
+ * bounces so the celebration registers visually without being
+ * disruptive. ~700ms total. */
+@keyframes welcome-emoji-pop {
+  0%   { transform: scale(0.4); opacity: 0; }
+  35%  { transform: scale(1.25); opacity: 1; }
+  55%  { transform: scale(0.92); }
+  75%  { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+.animate-welcome-emoji-pop {
+  animation: welcome-emoji-pop 0.7s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
 /* Onboarding completion: success badge spring-pop.
  * Lands with a subtle overshoot (scale 1.12 → 1) so the circle feels
  * physical rather than linearly interpolated. Paired with the drawn

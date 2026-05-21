@@ -34,8 +34,16 @@ export async function saveQuestionnaire(
 
 /**
  * Finalize onboarding. POST /complete marks `onboarded_at` atomically
- * (COALESCE-guarded for idempotency). We then refresh the auth store
- * so every gate sees the updated user.
+ * (COALESCE-guarded for idempotency) and emits the `onboarding_completed`
+ * analytics event exactly once. We then refresh the auth store so every
+ * gate sees the updated user — most importantly the workspace layout
+ * hard gate that redirects un-onboarded users back to /onboarding.
+ *
+ * v3 contract: this is the ONLY mechanism that flips `onboarded_at`
+ * from the frontend. All Helper-agent / starter-issue creation is now
+ * done by the welcome hook in the workspace shell using generic
+ * `createAgent` / `createIssue` calls, AFTER this call has returned
+ * and the user has been navigated into the workspace.
  *
  * `completionPath` is the client's view of which Step-3 exit the user
  * took; the server funnel-splits `onboarding_completed` on this value.
@@ -54,44 +62,6 @@ export async function completeOnboarding(
 }
 
 /**
- * Runtime-connected onboarding path. The server creates or reuses the
- * default Multica Helper agent and the single onboarding issue, then
- * marks onboarding complete.
- *
- * `starterPrompt` is the user's chosen first task (one of the three
- * cards in the workspace OnboardingHelperModal). When provided, it
- * becomes the seeded onboarding issue's description; when omitted
- * (legacy callers), the server uses a generic fallback description.
- */
-export async function bootstrapRuntimeOnboarding(
-  workspaceId: string,
-  runtimeId: string,
-  starterPrompt?: string,
-): Promise<{ workspace_id: string; agent_id: string; issue_id: string }> {
-  const result = await api.bootstrapOnboardingRuntime({
-    workspace_id: workspaceId,
-    runtime_id: runtimeId,
-    ...(starterPrompt ? { starter_prompt: starterPrompt } : {}),
-  });
-  await useAuthStore.getState().refreshMe();
-  return result;
-}
-
-/**
- * Runtime-skipped onboarding path. The server creates or reuses one
- * install-runtime onboarding issue and marks onboarding complete.
- */
-export async function bootstrapNoRuntimeOnboarding(
-  workspaceId: string,
-): Promise<{ workspace_id: string; issue_id: string }> {
-  const result = await api.bootstrapOnboardingNoRuntime({
-    workspace_id: workspaceId,
-  });
-  await useAuthStore.getState().refreshMe();
-  return result;
-}
-
-/**
  * Records interest in cloud runtimes. Pure side effect — does NOT
  * complete onboarding; the user still has to pick a real Step 3
  * path (CLI with a detected runtime) or Skip to move on.
@@ -105,33 +75,4 @@ export async function joinCloudWaitlist(
   reason: string,
 ): Promise<void> {
   await api.joinCloudWaitlist({ email, reason });
-}
-
-/**
- * Persist the user's Step 3 runtime selection. Replaces the prior pattern
- * of carrying the choice in React state inside `StepRuntimeConnect` (which
- * dropped it the moment Step 3 unmounted).
- *
- * After this call the auth store's `me.onboarding_runtime_id` reflects the
- * choice, so the workspace-entry init can read it directly.
- *
- * Mutually exclusive with `recordOnboardingRuntimeSkipped` — server's CHECK
- * constraint rejects (runtime_id, skipped=true) and the handler returns 400
- * if the client tries to send both together.
- */
-export async function recordOnboardingRuntimeChoice(
-  runtimeId: string,
-): Promise<void> {
-  const user = await api.patchOnboarding({ runtime_id: runtimeId });
-  useAuthStore.getState().setUser(user);
-}
-
-/**
- * Persist the user's Step 3 explicit Skip. The workspace-entry init reads
- * `me.onboarding_runtime_skipped` to decide whether to auto-seed the
- * install-runtime issue + mark onboarded.
- */
-export async function recordOnboardingRuntimeSkipped(): Promise<void> {
-  const user = await api.patchOnboarding({ runtime_skipped: true });
-  useAuthStore.getState().setUser(user);
 }

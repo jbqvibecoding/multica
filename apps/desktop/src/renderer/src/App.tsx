@@ -6,6 +6,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { workspaceKeys, workspaceListOptions } from "@multica/core/workspace/queries";
 import { api } from "@multica/core/api";
 import { useHasOnboarded } from "@multica/core/paths";
+import { setCurrentWorkspace } from "@multica/core/platform";
 import { ThemeProvider } from "@multica/ui/components/common/theme-provider";
 import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
 import { Toaster } from "@multica/ui/components/ui/sonner";
@@ -118,29 +119,31 @@ function AppContent() {
     : undefined;
   useDaemonIPCBridge(activeWsId);
 
-  // Pre-workspace overlay routing for desktop. Mirrors the web entry-point
-  // judgment in callback / login:
-  //   wsCount > 0                → no overlay, fall through to dashboard
-  //                                (workspace-layer OnboardingHelperModal
-  //                                handles un-onboarded mid-flow users)
-  //   un-onboarded + no workspace:
-  //     pending invites on email → /invitations overlay
-  //     no invites               → /onboarding overlay
-  //   onboarded + no workspace   → /workspaces/new overlay
+  // Pre-workspace overlay routing for desktop. Mirrors the web layout
+  // hard gate via overlays (desktop has no URL bar, so we open the
+  // onboarding overlay instead of router.replace):
+  //   onboarded + has workspace      → no overlay, dashboard
+  //   un-onboarded (any wsCount):
+  //     pending invites on email     → /invitations overlay
+  //     no invites                   → /onboarding overlay
+  //   onboarded + no workspace       → /workspaces/new overlay
   //
-  // "un-onboarded but in workspace" is now a valid mid-flow state:
-  // CreateWorkspace no longer marks onboarded — only BootstrapOnboardingRuntime
-  // does, via the workspace OnboardingHelperModal that fires inside the
-  // workspace shell. AcceptInvitation still marks (invitee path skips the
-  // modal). The `wsCount > 0 → no overlay` rule covers this: if the user
-  // has at least one workspace, we fall through to the dashboard and the
-  // workspace shell mounts the modal if needed.
+  // V3 invariant: `onboarded_at != null` is the only path into the
+  // dashboard. CreateWorkspace does not mark onboarded; only Step 3's
+  // CompleteOnboarding (and AcceptInvitation) flip the flag. A user who
+  // somehow has a workspace but no onboarded mark must be sent back to
+  // /onboarding — we also clear the active workspace so the dashboard
+  // doesn't render under the overlay with stale workspace context.
   useEffect(() => {
     if (!user || !workspaceListFetched) return undefined;
     const { overlay, open } = useWindowOverlayStore.getState();
     if (overlay) return undefined;
-    if (wsCount > 0) return undefined;
+    if (hasOnboarded && wsCount > 0) return undefined;
     if (!hasOnboarded) {
+      // Stale workspace context (if any) would leak X-Workspace-Slug
+      // headers into onboarding-time API calls. Clear it before opening
+      // the overlay.
+      setCurrentWorkspace(null, null);
       // Look up pending invitations by email. Network blip is non-fatal —
       // fall through to onboarding so the user isn't stuck on a blank
       // window. The sidebar's pending-invitations dropdown will surface

@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/multica-ai/multica/server/internal/service"
 )
 
 // newWaitlistTestUser inserts a fresh user row, returns its id, and
@@ -192,6 +190,13 @@ func TestJoinCloudWaitlistSecondCallOverwrites(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Shim endpoint tests — guard the BootstrapOnboarding* handlers that were
+// restored for desktop < v3 compatibility. Once telemetry confirms no
+// pre-v3 desktops remain, delete both these tests AND the handlers in
+// onboarding_shim.go in the same commit.
+// ---------------------------------------------------------------------------
+
 func TestBootstrapOnboardingRuntimeCreatesSingleGuideIssue(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -314,8 +319,6 @@ func TestBootstrapOnboardingRuntimeCreatesSingleGuideIssue(t *testing.T) {
 	if onboardedAt == nil {
 		t.Fatal("expected onboarded_at to be set")
 	}
-	// starter_content_state is claimed defensively so older desktop builds
-	// (which still render the legacy import dialog on NULL) don't surface it.
 	if starterContentState == nil || *starterContentState != "imported" {
 		t.Fatalf("starter_content_state = %v, want imported", starterContentState)
 	}
@@ -346,10 +349,6 @@ func TestBootstrapOnboardingRuntimeCreatesSingleGuideIssue(t *testing.T) {
 	}
 }
 
-// TestBootstrapOnboardingRuntime_WithStarterPrompt asserts that the
-// caller-supplied starter_prompt becomes the seeded onboarding issue's
-// description — that's how the workspace OnboardingHelperModal delivers
-// the user's chosen first task to Multica Helper.
 func TestBootstrapOnboardingRuntime_WithStarterPrompt(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -417,9 +416,6 @@ func TestBootstrapOnboardingRuntime_WithStarterPrompt(t *testing.T) {
 	}
 }
 
-// TestBootstrapOnboardingRuntime_NoStarterPrompt asserts that legacy
-// clients (no starter_prompt field, or empty) still get a non-blank
-// issue body via the onboardingIssueDescription fallback.
 func TestBootstrapOnboardingRuntime_NoStarterPrompt(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -463,7 +459,6 @@ func TestBootstrapOnboardingRuntime_NoStarterPrompt(t *testing.T) {
 	body := map[string]string{
 		"workspace_id": testWorkspaceID,
 		"runtime_id":   testRuntimeID,
-		// starter_prompt omitted — legacy client behavior
 	}
 	w := httptest.NewRecorder()
 	testHandler.BootstrapOnboardingRuntime(w, newRequest(http.MethodPost, "/api/me/onboarding/runtime-bootstrap", body))
@@ -495,7 +490,7 @@ func TestBootstrapOnboardingNoRuntimeCreatesSingleGuideIssue(t *testing.T) {
 	t.Cleanup(func() {
 		testPool.Exec(ctx,
 			`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
-			testWorkspaceID, service.NoRuntimeIssueTitle,
+			testWorkspaceID, noRuntimeIssueTitle,
 		)
 		testPool.Exec(ctx,
 			`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL, language = NULL WHERE id = $1`,
@@ -504,7 +499,7 @@ func TestBootstrapOnboardingNoRuntimeCreatesSingleGuideIssue(t *testing.T) {
 	})
 	testPool.Exec(ctx,
 		`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
-		testWorkspaceID, service.NoRuntimeIssueTitle,
+		testWorkspaceID, noRuntimeIssueTitle,
 	)
 	testPool.Exec(ctx,
 		`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL, language = 'en' WHERE id = $1`,
@@ -543,8 +538,8 @@ func TestBootstrapOnboardingNoRuntimeCreatesSingleGuideIssue(t *testing.T) {
 	`, resp.IssueID).Scan(&issueTitle, &assigneeType, &assigneeID, &issueStatus, &issuePriority, &description); err != nil {
 		t.Fatalf("lookup no-runtime onboarding issue: %v", err)
 	}
-	if issueTitle != service.NoRuntimeIssueTitle {
-		t.Fatalf("issue title = %q, want %q", issueTitle, service.NoRuntimeIssueTitle)
+	if issueTitle != noRuntimeIssueTitle {
+		t.Fatalf("issue title = %q, want %q", issueTitle, noRuntimeIssueTitle)
 	}
 	if assigneeType != "member" || assigneeID != testUserID {
 		t.Fatalf("issue assignee = %s/%s, want member/%s", assigneeType, assigneeID, testUserID)
@@ -618,7 +613,7 @@ func TestBootstrapOnboardingNoRuntimeUsesChineseGuideForChineseUsers(t *testing.
 	t.Cleanup(func() {
 		testPool.Exec(ctx,
 			`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
-			testWorkspaceID, service.NoRuntimeIssueTitle,
+			testWorkspaceID, noRuntimeIssueTitle,
 		)
 		testPool.Exec(ctx,
 			`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL, language = NULL WHERE id = $1`,
@@ -627,7 +622,7 @@ func TestBootstrapOnboardingNoRuntimeUsesChineseGuideForChineseUsers(t *testing.
 	})
 	testPool.Exec(ctx,
 		`DELETE FROM issue WHERE workspace_id = $1 AND title = $2`,
-		testWorkspaceID, service.NoRuntimeIssueTitle,
+		testWorkspaceID, noRuntimeIssueTitle,
 	)
 	testPool.Exec(ctx,
 		`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL, language = 'zh-Hans' WHERE id = $1`,
@@ -665,145 +660,5 @@ func TestBootstrapOnboardingNoRuntimeUsesChineseGuideForChineseUsers(t *testing.
 		if !strings.Contains(description, want) {
 			t.Fatalf("Chinese issue description missing %q: %q", want, description)
 		}
-	}
-}
-
-// newPatchOnboardingRequest builds the JSON body the PatchOnboarding handler
-// expects. Pointers let callers distinguish "omit" (nil) from "explicitly
-// send" (non-nil pointer).
-func newPatchOnboardingRequest(
-	userID string,
-	runtimeID *string,
-	runtimeSkipped *bool,
-) *http.Request {
-	body := map[string]any{}
-	if runtimeID != nil {
-		body["runtime_id"] = *runtimeID
-	}
-	if runtimeSkipped != nil {
-		body["runtime_skipped"] = *runtimeSkipped
-	}
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
-	req := httptest.NewRequest("PATCH", "/api/me/onboarding", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-User-ID", userID)
-	return req
-}
-
-// readOnboardingChoice loads the two runtime decision fields directly from
-// the DB so assertions don't depend on the handler's response shape.
-func readOnboardingChoice(t *testing.T, userID string) (*string, bool) {
-	t.Helper()
-	var rt *string
-	var sk bool
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT onboarding_runtime_id::text, onboarding_runtime_skipped
-		  FROM "user"
-		 WHERE id = $1
-	`, userID).Scan(&rt, &sk); err != nil {
-		t.Fatalf("read onboarding choice: %v", err)
-	}
-	return rt, sk
-}
-
-func ptrBool(b bool) *bool { return &b }
-
-// TestPatchOnboarding_RuntimeChoiceSwitch covers the cross-request switch
-// case that previously violated user_onboarding_runtime_choice_check: user
-// picks a runtime, then changes their mind and clicks Skip. Naive per-field
-// COALESCE wrote (uuid, true) and 500'd. The CASE expressions in
-// PatchUserOnboarding must collapse the switch atomically.
-func TestPatchOnboarding_RuntimeChoiceSwitch(t *testing.T) {
-	ctx := context.Background()
-	userID := newWaitlistTestUser(t, "patch-switch@multica.ai")
-
-	var wsID string
-	if err := testPool.QueryRow(ctx,
-		`INSERT INTO workspace (name, slug, issue_prefix) VALUES ($1, $2, $3) RETURNING id`,
-		"patch-switch-ws", "patch-switch-ws", "PSW",
-	).Scan(&wsID); err != nil {
-		t.Fatalf("insert workspace: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, wsID) })
-	var rtID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
-		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, '{}'::jsonb, now())
-		RETURNING id
-	`, wsID, "patch switch rt", "patch_switch_rt", "patch switch device").Scan(&rtID); err != nil {
-		t.Fatalf("insert runtime: %v", err)
-	}
-
-	// Step 1: pick the runtime → (rtID, false).
-	w := httptest.NewRecorder()
-	testHandler.PatchOnboarding(w, newPatchOnboardingRequest(userID, &rtID, nil))
-	if w.Code != http.StatusOK {
-		t.Fatalf("PATCH runtime_id: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	got, skipped := readOnboardingChoice(t, userID)
-	if got == nil || *got != rtID || skipped {
-		t.Fatalf("after pick: expected (%q, false), got (%v, %v)", rtID, got, skipped)
-	}
-
-	// Step 2: change mind, click Skip. Bug repro: COALESCE preserved rtID,
-	// SQL wrote (rtID, true), CHECK violated → 500. Fix asserts (NULL, true).
-	w = httptest.NewRecorder()
-	testHandler.PatchOnboarding(w, newPatchOnboardingRequest(userID, nil, ptrBool(true)))
-	if w.Code != http.StatusOK {
-		t.Fatalf("PATCH skipped=true after pick: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	got, skipped = readOnboardingChoice(t, userID)
-	if got != nil {
-		t.Fatalf("after switch to skip: runtime_id must be NULL, got %q", *got)
-	}
-	if !skipped {
-		t.Fatalf("after switch to skip: skipped must be true")
-	}
-
-	// Step 3: switch back to picking a runtime. skipped must flip to false.
-	w = httptest.NewRecorder()
-	testHandler.PatchOnboarding(w, newPatchOnboardingRequest(userID, &rtID, nil))
-	if w.Code != http.StatusOK {
-		t.Fatalf("PATCH runtime_id after skip: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	got, skipped = readOnboardingChoice(t, userID)
-	if got == nil || *got != rtID || skipped {
-		t.Fatalf("after switch back: expected (%q, false), got (%v, %v)", rtID, got, skipped)
-	}
-}
-
-// TestPatchOnboarding_PreserveUntouched covers the questionnaire-only path:
-// when runtime fields are omitted they must not be clobbered.
-func TestPatchOnboarding_PreserveUntouched(t *testing.T) {
-	ctx := context.Background()
-	userID := newWaitlistTestUser(t, "patch-preserve@multica.ai")
-
-	if _, err := testPool.Exec(ctx, `
-		UPDATE "user" SET onboarding_runtime_skipped = TRUE WHERE id = $1
-	`, userID); err != nil {
-		t.Fatalf("seed skipped: %v", err)
-	}
-
-	body := map[string]any{
-		"questionnaire": map[string]any{"role": "engineer", "version": 2},
-	}
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
-	req := httptest.NewRequest("PATCH", "/api/me/onboarding", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-User-ID", userID)
-	w := httptest.NewRecorder()
-	testHandler.PatchOnboarding(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("PATCH questionnaire-only: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	got, skipped := readOnboardingChoice(t, userID)
-	if got != nil {
-		t.Fatalf("runtime_id must remain NULL, got %q", *got)
-	}
-	if !skipped {
-		t.Fatalf("runtime_skipped must remain true after questionnaire-only patch")
 	}
 }

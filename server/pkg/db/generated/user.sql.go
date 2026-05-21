@@ -14,7 +14,7 @@ import (
 const createUser = `-- name: CreateUser :one
 INSERT INTO "user" (name, email, avatar_url)
 VALUES ($1, $2, $3)
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, onboarding_runtime_id, onboarding_runtime_skipped
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description
 `
 
 type CreateUserParams struct {
@@ -40,14 +40,12 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.StarterContentState,
 		&i.Language,
 		&i.ProfileDescription,
-		&i.OnboardingRuntimeID,
-		&i.OnboardingRuntimeSkipped,
 	)
 	return i, err
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, onboarding_runtime_id, onboarding_runtime_skipped FROM "user"
+SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description FROM "user"
 WHERE id = $1
 `
 
@@ -68,14 +66,12 @@ func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (User, error) {
 		&i.StarterContentState,
 		&i.Language,
 		&i.ProfileDescription,
-		&i.OnboardingRuntimeID,
-		&i.OnboardingRuntimeSkipped,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, onboarding_runtime_id, onboarding_runtime_skipped FROM "user"
+SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description FROM "user"
 WHERE email = $1
 `
 
@@ -96,8 +92,6 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.StarterContentState,
 		&i.Language,
 		&i.ProfileDescription,
-		&i.OnboardingRuntimeID,
-		&i.OnboardingRuntimeSkipped,
 	)
 	return i, err
 }
@@ -108,7 +102,7 @@ UPDATE "user" SET
     cloud_waitlist_reason = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, onboarding_runtime_id, onboarding_runtime_skipped
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description
 `
 
 type JoinCloudWaitlistParams struct {
@@ -137,8 +131,6 @@ func (q *Queries) JoinCloudWaitlist(ctx context.Context, arg JoinCloudWaitlistPa
 		&i.StarterContentState,
 		&i.Language,
 		&i.ProfileDescription,
-		&i.OnboardingRuntimeID,
-		&i.OnboardingRuntimeSkipped,
 	)
 	return i, err
 }
@@ -148,7 +140,7 @@ UPDATE "user" SET
     onboarded_at = COALESCE(onboarded_at, now()),
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, onboarding_runtime_id, onboarding_runtime_skipped
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description
 `
 
 func (q *Queries) MarkUserOnboarded(ctx context.Context, id pgtype.UUID) (User, error) {
@@ -168,71 +160,29 @@ func (q *Queries) MarkUserOnboarded(ctx context.Context, id pgtype.UUID) (User, 
 		&i.StarterContentState,
 		&i.Language,
 		&i.ProfileDescription,
-		&i.OnboardingRuntimeID,
-		&i.OnboardingRuntimeSkipped,
 	)
 	return i, err
 }
 
 const patchUserOnboarding = `-- name: PatchUserOnboarding :one
 UPDATE "user" SET
-    onboarding_questionnaire   = COALESCE($1, onboarding_questionnaire),
-    -- Casts on every reference are required for PG to infer parameter types
-    -- inside a CASE branch (otherwise: "could not determine data type of
-    -- parameter $N", SQLSTATE 42P08).
-    onboarding_runtime_id = CASE
-        -- Caller explicitly skipped: drop any previously-chosen runtime.
-        WHEN $2::boolean IS TRUE THEN NULL
-        -- Caller picked a runtime: write it.
-        WHEN $3::uuid IS NOT NULL THEN $3::uuid
-        -- Caller touched neither field: preserve.
-        ELSE onboarding_runtime_id
-    END,
-    onboarding_runtime_skipped = CASE
-        -- Caller picked a runtime: skipped must become FALSE (whether it
-        -- was previously TRUE from an earlier Skip, or FALSE already).
-        WHEN $3::uuid IS NOT NULL THEN FALSE
-        -- Caller explicitly set skipped to true/false: write it.
-        WHEN $2::boolean IS NOT NULL THEN $2::boolean
-        -- Caller touched neither field: preserve.
-        ELSE onboarding_runtime_skipped
-    END,
+    onboarding_questionnaire = COALESCE($1, onboarding_questionnaire),
     updated_at = now()
-WHERE id = $4
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, onboarding_runtime_id, onboarding_runtime_skipped
+WHERE id = $2
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description
 `
 
 type PatchUserOnboardingParams struct {
-	Questionnaire  []byte      `json:"questionnaire"`
-	RuntimeSkipped pgtype.Bool `json:"runtime_skipped"`
-	RuntimeID      pgtype.UUID `json:"runtime_id"`
-	ID             pgtype.UUID `json:"id"`
+	Questionnaire []byte      `json:"questionnaire"`
+	ID            pgtype.UUID `json:"id"`
 }
 
-// Partial update of the user's onboarding decision fields. Each field is
-// optional (sqlc.narg) so the handler can patch one slot without
-// clobbering others — but the runtime fields are NOT independent. They
-// encode a 3-state machine guarded by user_onboarding_runtime_choice_check:
-//
-//	(NULL,   false)  not yet decided
-//	(uuid,   false)  picked a runtime
-//	(NULL,   true)   explicitly skipped
-//
-// (uuid, true) is rejected by the CHECK constraint, which means a naive
-// COALESCE on each field independently breaks under a switch path —
-// e.g. user picks runtime → row is (X, false) → user later sends
-// {skipped: true} → COALESCE preserves X → SQL writes (X, true) → 500.
-//
-// The CASE expressions below collapse the switch atomically: any caller
-// that sets one side of the pair clears the other in the same statement.
-// Callers that omit both leave the row untouched.
+// Partial update of the user's onboarding decision fields. Currently only the
+// questionnaire JSONB is patchable — the v2 attempt at persisting Step 3
+// runtime choice on the user row was reverted; that state now lives in a
+// frontend Zustand transient store.
 func (q *Queries) PatchUserOnboarding(ctx context.Context, arg PatchUserOnboardingParams) (User, error) {
-	row := q.db.QueryRow(ctx, patchUserOnboarding,
-		arg.Questionnaire,
-		arg.RuntimeSkipped,
-		arg.RuntimeID,
-		arg.ID,
-	)
+	row := q.db.QueryRow(ctx, patchUserOnboarding, arg.Questionnaire, arg.ID)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -248,8 +198,6 @@ func (q *Queries) PatchUserOnboarding(ctx context.Context, arg PatchUserOnboardi
 		&i.StarterContentState,
 		&i.Language,
 		&i.ProfileDescription,
-		&i.OnboardingRuntimeID,
-		&i.OnboardingRuntimeSkipped,
 	)
 	return i, err
 }
@@ -259,7 +207,7 @@ UPDATE "user" SET
     starter_content_state = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, onboarding_runtime_id, onboarding_runtime_skipped
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description
 `
 
 type SetStarterContentStateParams struct {
@@ -289,8 +237,6 @@ func (q *Queries) SetStarterContentState(ctx context.Context, arg SetStarterCont
 		&i.StarterContentState,
 		&i.Language,
 		&i.ProfileDescription,
-		&i.OnboardingRuntimeID,
-		&i.OnboardingRuntimeSkipped,
 	)
 	return i, err
 }
@@ -303,7 +249,7 @@ UPDATE "user" SET
     profile_description = COALESCE($5, profile_description),
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, onboarding_runtime_id, onboarding_runtime_skipped
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description
 `
 
 type UpdateUserParams struct {
@@ -337,8 +283,6 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.StarterContentState,
 		&i.Language,
 		&i.ProfileDescription,
-		&i.OnboardingRuntimeID,
-		&i.OnboardingRuntimeSkipped,
 	)
 	return i, err
 }

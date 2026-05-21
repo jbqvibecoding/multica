@@ -179,34 +179,52 @@
     "add_more_hint": "Add more agents anytime. A small team of specialized agents beats one jack-of-all-trades.",
     "docs_link": "Creating your first agent →"
   },
-  "onboarding_helper_modal": {
-    "title": "Meet Multica Helper",
-    "subtitle": "Your first agent in this workspace. Pick something to assign as your first task — Helper will pick it up and reply on the issue.",
-    "cards": {
-      "intro": {
-        "title": "Introduce me to Multica",
-        "subtitle": "Have Helper walk you through what Multica is and how to work with agents.",
-        "prompt": "Introduce me to Multica. Explain what this workspace is, what agents do here, and what I should try first."
-      },
-      "assign": {
-        "title": "Show me how to assign an issue",
-        "subtitle": "Helper will demonstrate assignees, @mentions, and the issue thread by walking through this one.",
-        "prompt": "Show me how to assign an issue to an agent and how @mentions work. Use this issue as the worked example."
-      },
-      "second_agent": {
-        "title": "Help me create a second agent",
-        "subtitle": "Watch Helper spin up a new teammate from a template using the multica CLI.",
-        "prompt": "Help me create a second agent in this workspace. Ask me what kind of agent I want, then create it for me using the multica CLI."
+  "welcome_after_onboarding": {
+    "loading_helper": "Preparing your Helper…",
+    "error_title": "Couldn't finish setup",
+    "error_generic": "Something went wrong. Try again.",
+    "retry": "Try again",
+    "dismiss_error": "Dismiss",
+    "runtime": {
+      "title": "Meet Multica Helper",
+      "subtitle": "Your first agent in this workspace. Pick something to assign as your first task — Helper will pick it up and reply on the issue.",
+      "helper_description": "Built-in workspace assistant. Answers Multica questions and runs CLI operations.",
+      "cards": {
+        "intro": {
+          "title": "Introduce me to Multica",
+          "subtitle": "Have Helper walk you through what Multica is and how to work with agents.",
+          "prompt": "Introduce me to Multica. Explain what this workspace is, what agents do here, and what I should try first."
+        },
+        "assign": {
+          "title": "Show me how to assign an issue",
+          "subtitle": "Helper will demonstrate assignees, @mentions, and the issue thread by walking through this one.",
+          "prompt": "Show me how to assign an issue to an agent and how @mentions work. Use this issue as the worked example."
+        },
+        "second_agent": {
+          "title": "Help me create a second agent",
+          "subtitle": "Watch Helper spin up a new teammate from a template using the multica CLI.",
+          "prompt": "Help me create a second agent in this workspace. Ask me what kind of agent I want, then create it for me using the multica CLI."
+        }
       }
     },
-    "dismiss_error": "Dismiss",
-    "error_generic": "Could not set up Multica Helper. Check your connection and try again."
-  },
-  "workspace_init": {
-    "setting_up": "Setting up your workspace…",
-    "error_title": "Couldn't finish setup",
-    "error_generic": "Something went wrong while setting up your workspace.",
-    "retry": "Try again"
+    "skip": {
+      "loading": "Setting up your workspace…",
+      "title": "Welcome to Multica!",
+      "subtitle": "We've added two tasks to help you with the next step.",
+      "got_it": "Got it",
+      "status_in_progress": "In progress",
+      "status_todo": "Todo",
+      "cards": {
+        "install_runtime": {
+          "title": "Connect a runtime",
+          "subtitle": "Install Codex or Kimi to bring agents online."
+        },
+        "create_agent": {
+          "title": "Create your first agent",
+          "subtitle": "Once a runtime is online, build your first Multica agent."
+        }
+      }
+    }
   },
   "step_workspace": {
     "eyebrow_first": "Your first workspace",

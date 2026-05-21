@@ -11,8 +11,6 @@ export const mockUser: User = {
   avatar_url: null,
   onboarded_at: "2026-01-01T00:00:00Z",
   onboarding_questionnaire: {},
-  onboarding_runtime_id: null,
-  onboarding_runtime_skipped: false,
   // Matches real server behavior for anyone who onboarded before this
   // field shipped — migration 054 backfills 'skipped_legacy'.
   starter_content_state: "skipped_legacy",
