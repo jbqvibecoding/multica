@@ -142,6 +142,8 @@
     "section_parent_issue": "父 issue",
     "section_pull_requests": "Pull Request",
     "section_metadata": "元数据",
+    "section_metadata_show_more": "展开剩余 {{count}} 个",
+    "section_metadata_show_less": "收起",
     "section_details": "详情",
     "section_token_usage": "Token 用量",
     "pull_requests_loading": "加载中…",

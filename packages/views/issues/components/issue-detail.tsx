@@ -297,6 +297,13 @@ const EMPTY_REPLIES: TimelineEntry[] = [];
 const OPTIONAL_PROP_KEYS = ["priority", "start_date", "due_date", "labels"] as const;
 type OptionalPropKey = (typeof OPTIONAL_PROP_KEYS)[number];
 
+// Metadata is a free-form KV bag; agents can pin arbitrarily many keys. When
+// the row count is small we render everything inline; once it crosses this
+// threshold we keep the first (LIMIT - 1) rows visible and tuck the rest
+// behind a toggle so the sidebar stays scannable. Mirrors the PR list
+// collapse rule in pull-request-list.tsx.
+const METADATA_LIMIT_BEFORE_COLLAPSE = 5;
+
 function isOptionalPropSet(
   issue: Issue,
   key: OptionalPropKey,
@@ -652,6 +659,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const [parentIssueOpen, setParentIssueOpen] = useState(true);
   const [pullRequestsOpen, setPullRequestsOpen] = useState(true);
   const [metadataOpen, setMetadataOpen] = useState(true);
+  const [metadataExpanded, setMetadataExpanded] = useState(false);
   const [tokenUsageOpen, setTokenUsageOpen] = useState(true);
   const githubSettings = useGitHubSettings();
 
@@ -1389,7 +1397,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       {/* Metadata — read-only KV strip. Agents write via the CLI / metadata
           API; UI editing is intentionally not in V1. Section hides itself
           when the issue has no keys to keep the sidebar quiet for the
-          common case where metadata is never set. */}
+          common case where metadata is never set. Long bags collapse
+          behind a toggle (see METADATA_LIMIT_BEFORE_COLLAPSE). */}
       {Object.keys(issue.metadata ?? {}).length > 0 && (
         <div>
           <button
@@ -1399,17 +1408,37 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             {t(($) => $.detail.section_metadata)}
             <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${metadataOpen ? "rotate-90" : ""}`} />
           </button>
-          {metadataOpen && (
-            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 pl-2">
-              {Object.entries(issue.metadata).map(([k, v]) => (
-                <PropRow key={k} label={k} interactive={false}>
-                  <span className="truncate text-muted-foreground">
-                    {typeof v === "boolean" ? (v ? "true" : "false") : String(v)}
-                  </span>
-                </PropRow>
-              ))}
-            </div>
-          )}
+          {metadataOpen && (() => {
+            const entries = Object.entries(issue.metadata);
+            const useCollapse = entries.length >= METADATA_LIMIT_BEFORE_COLLAPSE;
+            const head = useCollapse ? entries.slice(0, METADATA_LIMIT_BEFORE_COLLAPSE - 1) : entries;
+            const tail = useCollapse ? entries.slice(METADATA_LIMIT_BEFORE_COLLAPSE - 1) : [];
+            const visible = metadataExpanded ? entries : head;
+            return (
+              <div className="pl-2">
+                <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                  {visible.map(([k, v]) => (
+                    <PropRow key={k} label={k} interactive={false}>
+                      <span className="truncate text-muted-foreground">
+                        {typeof v === "boolean" ? (v ? "true" : "false") : String(v)}
+                      </span>
+                    </PropRow>
+                  ))}
+                </div>
+                {useCollapse && (
+                  <button
+                    type="button"
+                    onClick={() => setMetadataExpanded((v) => !v)}
+                    className="block w-[calc(100%+1rem)] -mx-2 rounded-md px-2 py-1.5 text-left text-[11px] text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+                  >
+                    {metadataExpanded
+                      ? t(($) => $.detail.section_metadata_show_less)
+                      : t(($) => $.detail.section_metadata_show_more, { count: tail.length })}
+                  </button>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 
