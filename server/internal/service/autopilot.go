@@ -183,6 +183,25 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 		return fmt.Errorf("create issue: %w", err)
 	}
 
+	// Fan out the default subscriber template inside the same tx as the
+	// issue insert, before EventIssueCreated fires — so notification
+	// listeners see the full subscriber set on the first event instead of
+	// racing the listener that would otherwise hydrate the template.
+	templateSubs, err := qtx.ListAutopilotSubscribers(ctx, ap.ID)
+	if err != nil {
+		return fmt.Errorf("list autopilot subscribers: %w", err)
+	}
+	for _, sub := range templateSubs {
+		if err := qtx.AddIssueSubscriber(ctx, db.AddIssueSubscriberParams{
+			IssueID:  issue.ID,
+			UserType: sub.UserType,
+			UserID:   sub.UserID,
+			Reason:   "autopilot",
+		}); err != nil {
+			return fmt.Errorf("add autopilot subscriber to issue: %w", err)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
 	}
