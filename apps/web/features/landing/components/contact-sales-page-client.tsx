@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { LandingHeader } from "./landing-header";
 import { LandingFooter } from "./landing-footer";
 import { useLocale } from "../i18n";
@@ -64,8 +64,21 @@ export function ContactSalesPageClient() {
 
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [state, setState] = useState<SubmitState>({ status: "idle" });
+  const successAnchorRef = useRef<HTMLDivElement | null>(null);
 
   const isBusy = state.status === "submitting";
+
+  // After a successful submit, the tall form collapses into the much shorter
+  // success card. The browser keeps the scroll offset, which lands the user
+  // on the footer — they have to scroll up to see the confirmation. Pull the
+  // page back so the thank-you message is in view.
+  useEffect(() => {
+    if (state.status !== "success") return;
+    successAnchorRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }, [state.status]);
 
   const emailDomain = useMemo(() => {
     const at = form.businessEmail.lastIndexOf("@");
@@ -148,7 +161,10 @@ export function ContactSalesPageClient() {
     <>
       <LandingHeader variant="light" />
       <main className="bg-[#f7f8fa] text-[#0a0d12]">
-        <div className="mx-auto max-w-[760px] px-4 py-12 sm:px-6 sm:py-16 lg:py-20">
+        <div
+          ref={successAnchorRef}
+          className="mx-auto max-w-[760px] px-4 py-12 sm:px-6 sm:py-16 lg:py-20"
+        >
           <div className="mb-8 text-center">
             <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#0a0d12]/45">
               {c.eyebrow}
