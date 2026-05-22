@@ -5,14 +5,12 @@ import (
 	"testing"
 )
 
-// Parent/Sub-issue Protocol — the brief teaches every issue-bound agent two
-// things: when finishing a child issue, tell the parent; and when creating
-// sub-issues, pick `--status todo` (start now) vs `--status backlog` (wait)
-// deliberately. The protocol is runtime-only (no server-side state sync) and
-// the section is identical for assignment- and comment-triggered runs — the
-// comment-triggered workflow rule "Do NOT change the issue status unless the
-// comment explicitly asks for it" naturally short-circuits the parent
-// notification, so the protocol stays a single description.
+// Parent/Sub-issue Protocol — after MUL-2538 the platform posts the
+// child-done parent notification itself, so the brief no longer asks the
+// agent to do it. Rule 1 is informational ("do NOT post one yourself");
+// rule 2 (sub-issue creation semantics) stays. Section is unchanged for
+// assignment- and comment-triggered runs and is suppressed for non-issue
+// modes.
 
 func TestParentSubIssueProtocolPresentForIssueRuns(t *testing.T) {
 	t.Parallel()
@@ -47,22 +45,14 @@ func TestParentSubIssueProtocolPresentForIssueRuns(t *testing.T) {
 				"parent/child tree via `parent_issue_id`",
 				"does NOT auto-sync",
 				"best-effort",
-				// Rule 1 — finish a child, tell the parent.
-				"**Tell the parent when you finish a child.**",
-				"`parent_issue_id`",
-				"top-level",
-				"NO `--parent`",
-				"`@mention` the parent's assignee",
-				"`mention://agent/<id>`",
-				"`mention://member/<id>`",
-				"`mention://squad/<id>`",
-				"no assignee",
-				// The comment-triggered escape hatch must live in the same
-				// unified paragraph so both runs read it.
-				"NOT changing this issue's status",
-				"not closing out the child",
-				"skip the parent notification",
-				// Rule 2 — sub-issue creation semantics.
+				// The platform-owns-it framing replaces the old "report up
+				// yourself" instruction.
+				"platform posts a top-level system comment on the parent",
+				// Rule 1 — explicit "do not post one yourself" guardrail.
+				"**Do NOT post your own parent-notification comment.**",
+				"system comment on the parent fires from the status transition",
+				"re-trigger the parent's assignee for nothing",
+				// Rule 2 — sub-issue creation semantics, unchanged.
 				"**Choosing `--status` when creating sub-issues.**",
 				"`--status todo` = **start now**",
 				"`--status backlog` = **wait**",
@@ -74,10 +64,23 @@ func TestParentSubIssueProtocolPresentForIssueRuns(t *testing.T) {
 					t.Errorf("[%s] protocol missing %q", tc.name, want)
 				}
 			}
-			// Earlier revisions split Step A by trigger type, used per-rule
-			// gating tables, or ### A/### B subheadings. The unified
-			// revision must not regress into any of those.
+			// The pre-MUL-2538 phrasing instructed the agent to compose a
+			// parent comment by hand — including a hardcoded `MUL-` prefix and
+			// an assignee mention. Both of those are exactly what user
+			// feedback on PR #2918 asked us to remove, so they must not come
+			// back through future edits.
 			for _, banned := range []string{
+				"**Tell the parent when you finish a child.**",
+				"multica issue comment add <parent-id>",
+				"with NO `--parent`",
+				"link the child as `[MUL-",
+				"`@mention` the parent's assignee",
+				"`mention://agent/<id>`",
+				"`mention://member/<id>`",
+				"`mention://squad/<id>`",
+				// Earlier revisions split Step A by trigger type, used per-rule
+				// gating tables, or ### A/### B subheadings. The unified
+				// revision must not regress into any of those.
 				"| Parent assignee | Parent status |",
 				"The same agent as yourself",
 				"| Member or squad |",
@@ -102,7 +105,7 @@ func TestParentSubIssueProtocolPresentForIssueRuns(t *testing.T) {
 }
 
 // Lock in the "compact convention, not a spec" framing: the Parent /
-// Sub-issue Protocol section must stay short. The unified two-rule revision
+// Sub-issue Protocol section must stay short. The new two-rule revision
 // runs around 6 lines; this guard prevents future edits from silently
 // re-inflating it back into a state-machine.
 func TestParentSubIssueProtocolIsCompact(t *testing.T) {
@@ -133,7 +136,7 @@ func TestParentSubIssueProtocolIsCompact(t *testing.T) {
 // Comment-triggered briefs must NOT carry any unconditional status-flip
 // command targeting the current issue. The previous revision had a
 // dedicated Step A that wrote `multica issue status <this-issue-id> in_review`
-// into the protocol; the unified revision removes that command from the
+// into the protocol; the current revision removes that command from the
 // protocol entirely and leans on the comment-triggered workflow rule
 // "Do NOT change the issue status unless the comment explicitly asks for it"
 // to keep the agent honest (Elon's blocking review on PR #2918).
@@ -153,32 +156,17 @@ func TestCommentTriggeredProtocolDoesNotForceInReview(t *testing.T) {
 		t.Errorf("comment-triggered brief must not contain a placeholder `<this-issue-id> in_review` flip — that conflicts with the comment-triggered \"do not change status unless asked\" rule")
 	}
 
-	// The comment-triggered workflow guardrail must still be present so the
-	// protocol's unified instruction has something to defer to.
+	// The comment-triggered workflow guardrail must still be present.
 	const guardrail = "Do NOT change the issue status unless the comment explicitly asks for it"
 	if !strings.Contains(out, guardrail) {
 		t.Errorf("expected the comment-triggered workflow guardrail %q to be present", guardrail)
-	}
-
-	// The unified protocol paragraph must still teach the agent that a
-	// comment-triggered run without a status flip means "not closing out
-	// the child" → skip the parent notification.
-	for _, want := range []string{
-		"NOT changing this issue's status",
-		"not closing out the child",
-		"skip the parent notification",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("comment-triggered protocol missing required short-circuit phrasing %q", want)
-		}
 	}
 }
 
 // Assignment-triggered briefs are the inverse boundary: when the agent owns
 // the issue lifecycle, the brief AS A WHOLE must still tell it to flip to
-// in_review on completion. After unification the flip lives in the
-// assignment-triggered workflow above (with the real id substituted), not
-// in the protocol section, so we assert against the actual id.
+// in_review on completion. The flip lives in the assignment-triggered
+// workflow above (with the real id substituted), not in the protocol section.
 func TestAssignmentTriggeredProtocolStillFlipsInReview(t *testing.T) {
 	t.Parallel()
 	const issueID = "77777777-8888-9999-aaaa-bbbbbbbbbbbb"
@@ -193,8 +181,8 @@ func TestAssignmentTriggeredProtocolStillFlipsInReview(t *testing.T) {
 
 // Rule 2 (creating sub-issues) must apply to any issue-bound run, including
 // a top-level parent issue that has no `parent_issue_id` of its own. The
-// unified preamble must not globally gate the protocol on the current issue
-// being a child, and rule 2 must not carry any `parent_issue_id` reference.
+// preamble must not globally gate the protocol on the current issue being a
+// child, and rule 2 must not carry any `parent_issue_id` reference.
 func TestSubIssueCreationRuleIsUnconditional(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
@@ -227,8 +215,8 @@ func TestSubIssueCreationRuleIsUnconditional(t *testing.T) {
 	}
 
 	// Find rule 2 and check it does NOT reference `parent_issue_id` at all
-	// (the only mention of `parent_issue_id` in the section belongs to
-	// rule 1's "if this issue has a `parent_issue_id`" gate).
+	// (after MUL-2538 the section as a whole only mentions `parent_issue_id`
+	// once, in the preamble framing — never inside rule 2).
 	rule2Idx := strings.Index(section, "2. **Choosing `--status` when creating sub-issues.**")
 	if rule2Idx == -1 {
 		t.Fatalf("rule 2 (Choosing `--status` when creating sub-issues) missing from protocol section")
@@ -236,12 +224,6 @@ func TestSubIssueCreationRuleIsUnconditional(t *testing.T) {
 	rule2 := section[rule2Idx:]
 	if strings.Contains(rule2, "parent_issue_id") {
 		t.Errorf("rule 2 (Choosing `--status` when creating sub-issues) must not be gated by `parent_issue_id`; it applies to any issue-bound run:\n%s", rule2)
-	}
-
-	// Rule 1 must still carry the gate — without it the agent might post on
-	// a parent that doesn't exist.
-	if !strings.Contains(section, "**Tell the parent when you finish a child.** If this issue has a `parent_issue_id`") {
-		t.Errorf("rule 1 missing per-rule `parent_issue_id` gate")
 	}
 }
 
