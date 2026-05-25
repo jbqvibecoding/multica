@@ -428,6 +428,41 @@ func TestAgentEnv_AgentActorRejected(t *testing.T) {
 	}
 }
 
+// TestAgentEnv_TaskTokenActorSource locks in the post-MUL-2600 attack
+// model: an agent process that strips its identifying headers
+// (X-Agent-ID / X-Task-ID) but is still authenticated by an `mat_`
+// task token MUST be recognized as actor=agent and rejected on the
+// env endpoint. The auth middleware sets X-Actor-Source=task_token
+// from the token row; resolveActor honors that header before the
+// header-pair fallback. Without this guard the lateral-movement fix
+// would only block "honest" CLIs that voluntarily set both headers.
+func TestAgentEnv_TaskTokenActorSource(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	targetID := createHandlerTestAgent(t, "env-tt-target-agent", nil)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET custom_env = '{"K":"v"}' WHERE id = $1`, targetID); err != nil {
+		t.Fatalf("failed to set custom_env: %v", err)
+	}
+
+	req := newRequest(http.MethodGet, "/api/agents/"+targetID+"/env", nil)
+	req = withURLParam(req, "id", targetID)
+	// Simulate the auth middleware's post-mat_-resolution state: the
+	// only header touching actor identity is X-Actor-Source. The agent
+	// process stripped X-Agent-ID and X-Task-ID, hoping to fall back
+	// to the member auth path — the server-set X-Actor-Source must
+	// short-circuit that escape.
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Del("X-Agent-ID")
+	req.Header.Del("X-Task-ID")
+	w := httptest.NewRecorder()
+	testHandler.GetAgentEnv(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 when X-Actor-Source=task_token, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestUpdateAgentEnv_PreservesSentinelValues verifies the **** guard.
 // A naive write would clobber real secrets with the masked
 // placeholder; we want any key whose value comes in as **** to keep
@@ -482,7 +517,11 @@ func TestUpdateAgentEnv_PreservesSentinelValues(t *testing.T) {
 		t.Errorf("stored custom_env mismatch:\n got:  %v\n want: %v", got, want)
 	}
 
-	// Audit row should reflect the diff.
+	// Audit row should reflect the diff. We decode the jsonb back into a
+	// typed map and compare semantically — postgres serializes jsonb with
+	// canonicalised whitespace (`"added_keys": ["BRAND_NEW"]`), so a raw
+	// substring match on the dense form silently fails on real database
+	// output.
 	var details string
 	if err := testPool.QueryRow(ctx, `
 		SELECT details::text FROM activity_log
@@ -491,14 +530,22 @@ func TestUpdateAgentEnv_PreservesSentinelValues(t *testing.T) {
 	`, testWorkspaceID, agentID).Scan(&details); err != nil {
 		t.Fatalf("expected agent_env_updated activity row: %v", err)
 	}
-	if !strings.Contains(details, `"added_keys":["BRAND_NEW"]`) {
-		t.Errorf("expected added_keys to include BRAND_NEW: %s", details)
+	var auditFields struct {
+		AddedKeys     []string `json:"added_keys"`
+		ChangedKeys   []string `json:"changed_keys"`
+		PreservedKeys []string `json:"preserved_keys"`
 	}
-	if !strings.Contains(details, `"changed_keys":["ALSO"]`) {
-		t.Errorf("expected changed_keys to include ALSO: %s", details)
+	if err := json.Unmarshal([]byte(details), &auditFields); err != nil {
+		t.Fatalf("failed to decode audit details: %v (raw=%s)", err, details)
 	}
-	if !strings.Contains(details, `"preserved_keys":["KEEP_ME"]`) {
-		t.Errorf("expected preserved_keys to include KEEP_ME: %s", details)
+	if !reflect.DeepEqual(auditFields.AddedKeys, []string{"BRAND_NEW"}) {
+		t.Errorf("added_keys: got %v, want [BRAND_NEW]; raw=%s", auditFields.AddedKeys, details)
+	}
+	if !reflect.DeepEqual(auditFields.ChangedKeys, []string{"ALSO"}) {
+		t.Errorf("changed_keys: got %v, want [ALSO]; raw=%s", auditFields.ChangedKeys, details)
+	}
+	if !reflect.DeepEqual(auditFields.PreservedKeys, []string{"KEEP_ME"}) {
+		t.Errorf("preserved_keys: got %v, want [KEEP_ME]; raw=%s", auditFields.PreservedKeys, details)
 	}
 	// Audit must never contain values.
 	for _, leak := range []string{"real-secret", "another-secret", "rotated", "fresh"} {
@@ -508,7 +555,7 @@ func TestUpdateAgentEnv_PreservesSentinelValues(t *testing.T) {
 	}
 }
 
-func TestUpdateAgent_DoesNotAcceptCustomEnv(t *testing.T) {
+func TestUpdateAgent_RejectsCustomEnvInBody(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -519,10 +566,10 @@ func TestUpdateAgent_DoesNotAcceptCustomEnv(t *testing.T) {
 		t.Fatalf("failed to seed custom_env: %v", err)
 	}
 
-	// Naive client passes custom_env via PUT /api/agents/{id}; the
-	// handler must silently ignore it and the stored value must remain
-	// unchanged. (If a future maintainer reintroduces the field, this
-	// test will fail.)
+	// Sending custom_env via the generic PUT /api/agents/{id} must fail
+	// loudly with a 400 — see the comment on the rejection in agent.go.
+	// Silently dropping the field used to make scripted clients believe
+	// they had rotated a secret when nothing actually happened.
 	body := map[string]any{
 		"description": "still updating description",
 		"custom_env":  map[string]string{"INJECTED": "should-not-stick"},
@@ -531,10 +578,14 @@ func TestUpdateAgent_DoesNotAcceptCustomEnv(t *testing.T) {
 	req = withURLParam(req, "id", agentID)
 	w := httptest.NewRecorder()
 	testHandler.UpdateAgent(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("UpdateAgent: expected 200, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("UpdateAgent: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "custom_env") || !strings.Contains(w.Body.String(), "/env") {
+		t.Errorf("error body should mention custom_env and the env endpoint; got %s", w.Body.String())
 	}
 
+	// The stored env must be untouched by the rejected request.
 	var stored string
 	if err := testPool.QueryRow(ctx, `SELECT custom_env::text FROM agent WHERE id = $1`, agentID).Scan(&stored); err != nil {
 		t.Fatalf("failed to read custom_env: %v", err)
@@ -543,7 +594,7 @@ func TestUpdateAgent_DoesNotAcceptCustomEnv(t *testing.T) {
 		t.Errorf("UpdateAgent must NOT touch custom_env; got %q", stored)
 	}
 	if strings.Contains(stored, "INJECTED") {
-		t.Errorf("UpdateAgent should have ignored custom_env in body; got %q", stored)
+		t.Errorf("UpdateAgent should have rejected custom_env in body; got %q", stored)
 	}
 }
 

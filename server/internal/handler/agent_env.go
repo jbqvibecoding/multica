@@ -95,6 +95,14 @@ func (h *Handler) authorizeAgentEnv(w http.ResponseWriter, r *http.Request) (db.
 // after gating through authorizeAgentEnv. Every successful read writes
 // an `agent_env_revealed` row to activity_log (keys only, never
 // values) so workspace owners have a trail of who saw which keys.
+//
+// Audit semantics are fail-closed: if we cannot persist the audit row
+// we MUST NOT serve the plaintext. A reveal we cannot record is
+// indistinguishable from an unaudited reveal, which would silently
+// break the MUL-2600 promise of "every reveal leaves a queryable
+// trail". Operators who hit a 500 here see the audit-log outage and
+// can fix it; the alternative — quietly handing out secrets — is
+// invisible.
 func (h *Handler) GetAgentEnv(w http.ResponseWriter, r *http.Request) {
 	agent, member, ok := h.authorizeAgentEnv(w, r)
 	if !ok {
@@ -118,13 +126,10 @@ func (h *Handler) GetAgentEnv(w http.ResponseWriter, r *http.Request) {
 		Action:      agentEnvActivityRevealed,
 		Details:     details,
 	}); err != nil {
-		// Audit failures should never block a legitimate read; surface
-		// the failure in logs so they can be alerted on but still
-		// return the secrets. Without this fallback an outage on the
-		// activity_log write path would lock owners out of their own
-		// agent envs.
-		slog.Warn("failed to write agent_env_revealed activity",
+		slog.Error("agent_env_revealed audit write failed; refusing to serve plaintext",
 			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
+		writeError(w, http.StatusInternalServerError, "audit log write failed; refusing to serve env without a recorded reveal")
+		return
 	}
 
 	writeJSON(w, http.StatusOK, AgentEnvResponse{
@@ -141,6 +146,11 @@ func (h *Handler) GetAgentEnv(w http.ResponseWriter, r *http.Request) {
 // straightforward write would have stored literal `****` in place of
 // the real secret. Audit log captures the symmetric difference between
 // old and new keys but never values.
+//
+// Persist + audit run inside one DB transaction so they commit
+// together or roll back together. An audit-write outage cannot leave
+// an unaudited env mutation on disk, and a persist failure does not
+// leave a phantom audit row claiming a change that never happened.
 func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
 	agent, member, ok := h.authorizeAgentEnv(w, r)
 	if !ok {
@@ -164,7 +174,18 @@ func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to encode env")
 		return
 	}
-	updated, err := h.Queries.UpdateAgentCustomEnv(r.Context(), db.UpdateAgentCustomEnvParams{
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		slog.Error("agent_env update: begin tx failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
+		writeError(w, http.StatusInternalServerError, "failed to update env")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	updated, err := qtx.UpdateAgentCustomEnv(r.Context(), db.UpdateAgentCustomEnvParams{
 		ID:        agent.ID,
 		CustomEnv: envBytes,
 	})
@@ -184,7 +205,7 @@ func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
 		"preserved_keys": audit.preserved,
 	}
 	details, _ := json.Marshal(auditDetails)
-	if _, err := h.Queries.CreateActivity(r.Context(), db.CreateActivityParams{
+	if _, err := qtx.CreateActivity(r.Context(), db.CreateActivityParams{
 		WorkspaceID: agent.WorkspaceID,
 		IssueID:     pgtype.UUID{},
 		ActorType:   pgtype.Text{String: "member", Valid: true},
@@ -192,8 +213,17 @@ func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
 		Action:      agentEnvActivityUpdated,
 		Details:     details,
 	}); err != nil {
-		slog.Warn("failed to write agent_env_updated activity",
+		slog.Error("agent_env_updated audit write failed; rolling back update",
 			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
+		writeError(w, http.StatusInternalServerError, "audit log write failed; env update rolled back")
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		slog.Error("agent_env update: tx commit failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
+		writeError(w, http.StatusInternalServerError, "failed to update env")
+		return
 	}
 
 	// Broadcast an agent:status update so connected clients refresh the
@@ -201,7 +231,7 @@ func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
 	// AgentResponse — no env values are sent.
 	resp := agentToResponse(updated)
 	workspaceID := uuidToString(updated.WorkspaceID)
-	h.publish(protocol.EventAgentStatus, workspaceID, "member", uuidToString(member.UserID), map[string]any{"agent": resp})
+	h.publish(protocol.EventAgentStatus, workspaceID, "member", uuidToString(member.UserID), map[string]any{"agent": broadcastAgentResponse(resp)})
 
 	writeJSON(w, http.StatusOK, AgentEnvResponse{
 		AgentID:   uuidToString(updated.ID),

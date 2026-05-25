@@ -209,6 +209,15 @@ type AgentTaskResponse struct {
 	RequestingUserName               string `json:"requesting_user_name,omitempty"`
 	RequestingUserProfileDescription string `json:"requesting_user_profile_description,omitempty"`
 	Kind                             string `json:"kind"` // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
+	// AuthToken is the task-scoped `mat_` token the daemon must inject as
+	// MULTICA_TOKEN in the agent process environment. The server binds it to
+	// this (agent_id, task_id) pair at claim time and treats any request
+	// authenticated with it as actor=agent, regardless of headers — so the
+	// agent process cannot use it to read another agent's secrets via the
+	// env-management endpoint. Empty when the runtime has no owning user
+	// (cloud / system runtimes that pre-date per-task tokens); in that case
+	// the daemon falls back to its own credential. See MUL-2600.
+	AuthToken string `json:"auth_token,omitempty"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata embedded in
@@ -365,7 +374,12 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		if skills, ok := skillMap[resp.ID]; ok {
 			resp.Skills = skills
 		}
-		if alwaysRedact || !canViewAgentSecrets(a, userID, member.Role) {
+		// Agent actors NEVER see mcp_config secrets, even when their host's
+		// PAT would normally satisfy the owner/admin role gate. Otherwise an
+		// agent running under an owner's daemon could read other agents'
+		// MCP configs (which routinely embed third-party API tokens) — the
+		// same lateral-movement vector MUL-2600 closed for custom_env.
+		if actorType == "agent" || alwaysRedact || !canViewAgentSecrets(a, userID, member.Role) {
 			redactMcpConfig(&resp)
 		}
 		visible = append(visible, resp)
@@ -421,7 +435,8 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	alwaysRedact := workspaceAlwaysRedactSecrets(ws.Settings)
-	if alwaysRedact {
+	// Agent actors NEVER see mcp_config (see ListAgents for the rationale).
+	if actorType == "agent" || alwaysRedact {
 		redactMcpConfig(&resp)
 	} else if member, ok := ctxMember(r.Context()); ok {
 		if !canViewAgentSecrets(agent, userID, member.Role) {
@@ -614,7 +629,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 
 	resp := agentToResponse(created)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
-	h.publish(protocol.EventAgentCreated, workspaceID, actorType, actorID, map[string]any{"agent": resp})
+	h.publish(protocol.EventAgentCreated, workspaceID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 
 	h.Analytics.Capture(analytics.AgentCreated(
 		ownerID,
@@ -695,6 +710,21 @@ func canViewAgentSecrets(agent db.Agent, userID string, memberRole string) bool 
 	return uuidToString(agent.OwnerID) == userID
 }
 
+// broadcastAgentResponse strips secret-bearing fields from an
+// AgentResponse before it goes onto the WebSocket bus. Mutation
+// handlers call this when fanning out create/update/archive/restore
+// events: subscribers (which include agent processes that have
+// authenticated with their own task tokens) must not learn another
+// agent's mcp_config via a WS push that bypassed the read-path
+// redaction in ListAgents / GetAgent. The caller still receives the
+// canonical form in the HTTP response; only the broadcast copy is
+// redacted.
+func broadcastAgentResponse(resp AgentResponse) AgentResponse {
+	out := resp
+	redactMcpConfig(&out)
+	return out
+}
+
 // redactMcpConfig removes the mcp_config value from the response when the caller is not
 // authorised to view it. The field is set to null; McpConfigRedacted is set to true so
 // callers know a config exists without seeing its contents (which may contain secrets).
@@ -737,6 +767,18 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	rawFields, err := decodeJSONBodyWithRawFields(r.Body, &req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Hard-reject any attempt to write custom_env through the generic
+	// update endpoint. Silently dropping the field (which is what an
+	// `omitempty` field would do) was the pre-PR behaviour and led to
+	// users believing they had rotated a secret when the value was
+	// actually unchanged. env values move only through `PUT
+	// /api/agents/{id}/env` — that endpoint is owner/admin-only, denies
+	// agent actors, and writes a queryable audit row.
+	if _, ok := rawFields["custom_env"]; ok {
+		writeError(w, http.StatusBadRequest, "custom_env is no longer accepted on this endpoint; use PUT /api/agents/{id}/env (or `multica agent env set`)")
 		return
 	}
 
@@ -904,7 +946,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	slog.Info("agent updated", append(logger.RequestAttrs(r), "agent_id", id, "workspace_id", uuidToString(updated.WorkspaceID))...)
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(updated.WorkspaceID))
-	h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, map[string]any{"agent": resp})
+	h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -962,7 +1004,7 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 	slog.Info("agent archived", append(logger.RequestAttrs(r), "agent_id", id, "workspace_id", wsID)...)
 	resp := agentToResponse(archived)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
-	h.publish(protocol.EventAgentArchived, wsID, actorType, actorID, map[string]any{"agent": resp})
+	h.publish(protocol.EventAgentArchived, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -992,7 +1034,7 @@ func (h *Handler) RestoreAgent(w http.ResponseWriter, r *http.Request) {
 	resp := agentToResponse(restored)
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
-	h.publish(protocol.EventAgentRestored, wsID, actorType, actorID, map[string]any{"agent": resp})
+	h.publish(protocol.EventAgentRestored, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	writeJSON(w, http.StatusOK, resp)
 }
 
