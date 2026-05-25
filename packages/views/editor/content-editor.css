@@ -489,7 +489,11 @@
   vertical-align: middle;
 }
 
-/* Block-level NodeViews (fileCard) need to override the inline default above */
+/* Block-level NodeViews need to override the inline default above */
+.rich-text-editor .code-block-wrapper {
+  display: block !important;
+}
+
 .rich-text-editor .file-card-node {
   display: block !important;
 }
