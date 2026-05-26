@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
-import { Minus, Maximize2, Minimize2, ChevronDown, ChevronRight, Plus, Check, Trash2, Pencil } from "lucide-react";
+import { Minus, Maximize2, ChevronDown, ChevronRight, Plus, Check, Trash2, Pencil } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
@@ -50,6 +50,7 @@ import {
   useUpdateChatSession,
 } from "@multica/core/chat/mutations";
 import { useChatStore } from "@multica/core/chat";
+import { ChatFullscreen } from "./chat-fullscreen";
 import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
 import { ChatInput } from "./chat-input";
 import {
@@ -76,6 +77,8 @@ export function ChatWindow() {
   const setOpen = useChatStore((s) => s.setOpen);
   const setActiveSession = useChatStore((s) => s.setActiveSession);
   const setSelectedAgentId = useChatStore((s) => s.setSelectedAgentId);
+  const isFullscreen = useChatStore((s) => s.isFullscreen);
+  const setFullscreen = useChatStore((s) => s.setFullscreen);
   const user = useAuthStore((s) => s.user);
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
@@ -435,13 +438,45 @@ export function ChatWindow() {
   const isExpanded = useChatStore((s) => s.isExpanded);
 
   const windowRef = useRef<HTMLDivElement>(null);
-  const { renderWidth, renderHeight, isAtMax, boundsReady, isDragging, toggleExpand, startDrag } = useChatResize(windowRef);
+  const { renderWidth, renderHeight, boundsReady, isDragging, startDrag } = useChatResize(windowRef);
 
   // Show the list (vs empty state) as soon as there's anything to display —
   // a real message, or a pending task whose timeline will stream in.
   const hasMessages = messages.length > 0 || !!pendingTaskId;
 
   const isVisible = isOpen && (isExpanded || boundsReady);
+
+  if (isOpen && isFullscreen) {
+    return (
+      <ChatFullscreen
+        sessions={sessions}
+        agents={agents}
+        activeSessionId={activeSessionId}
+        activeAgent={activeAgent}
+        messages={messages}
+        messagesLoading={messagesLoading}
+        pendingTask={pendingTask}
+        pendingTaskId={pendingTaskId}
+        availability={availability}
+        noAgent={noAgent}
+        isSessionArchived={isSessionArchived}
+        onSend={handleSend}
+        onUploadFile={handleUploadFile}
+        onStop={handleStop}
+        onSelectSession={handleSelectSession}
+        onNewChat={handleNewChat}
+        agentDropdown={
+          <AgentDropdown
+            agents={availableAgents}
+            activeAgent={activeAgent}
+            userId={user?.id}
+            onSelect={handleSelectAgent}
+          />
+        }
+        contextAnchorButton={<ContextAnchorButton />}
+      />
+    );
+  }
 
   const containerClass = "absolute bottom-2 right-2 z-50 flex flex-col rounded-xl ring-1 ring-foreground/10 bg-sidebar shadow-2xl overflow-hidden";
   const containerStyle: React.CSSProperties = {
@@ -504,14 +539,14 @@ export function ChatWindow() {
                   variant="ghost"
                   size="icon-sm"
                   className="text-muted-foreground"
-                  onClick={toggleExpand}
+                  onClick={() => setFullscreen(true)}
                 />
               }
             >
-              {isExpanded || isAtMax ? <Minimize2 /> : <Maximize2 />}
+              <Maximize2 />
             </TooltipTrigger>
             <TooltipContent side="top">
-              {isExpanded || isAtMax ? t(($) => $.window.restore_tooltip) : t(($) => $.window.expand_tooltip)}
+              {t(($) => $.window.expand_tooltip)}
             </TooltipContent>
           </Tooltip>
           <Tooltip>
