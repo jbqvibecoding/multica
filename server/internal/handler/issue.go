@@ -16,9 +16,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -1973,40 +1973,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		dueDate = pgtype.Timestamptz{Time: t, Valid: true}
 	}
 
-	// Use a transaction to atomically guard against active duplicates,
-	// increment the workspace issue counter, and create the issue.
-	tx, err := h.TxStarter.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create issue")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	qtx := h.Queries.WithTx(tx)
-	duplicate, foundDuplicate, err := issueguard.LockAndFindActiveDuplicate(r.Context(), qtx, wsUUID, projectID, parentIssueID, req.Title, req.AllowDuplicate)
-	if err != nil {
-		slog.Warn("duplicate issue guard failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
-		writeError(w, http.StatusInternalServerError, "failed to create issue")
-		return
-	}
-	if foundDuplicate {
-		prefix := h.getIssuePrefix(r.Context(), duplicate.WorkspaceID)
-		existing := issueToResponse(duplicate, prefix)
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"code":  "active_duplicate_issue",
-			"error": duplicateIssueMessage(existing),
-			"issue": existing,
-		})
-		return
-	}
-
-	issueNumber, err := qtx.IncrementIssueCounter(r.Context(), wsUUID)
-	if err != nil {
-		slog.Warn("increment issue counter failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
-		writeError(w, http.StatusInternalServerError, "failed to create issue")
-		return
-	}
-
 	// Determine creator identity: agent (via X-Agent-ID header) or member.
 	creatorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
 
@@ -2036,45 +2002,69 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		originID = oid
 	}
 
-	var issue db.Issue
-	if originType.Valid {
-		issue, err = qtx.CreateIssueWithOrigin(r.Context(), db.CreateIssueWithOriginParams{
-			WorkspaceID:   wsUUID,
-			Title:         req.Title,
-			Description:   ptrToText(req.Description),
-			Status:        status,
-			Priority:      priority,
-			AssigneeType:  assigneeType,
-			AssigneeID:    assigneeID,
-			CreatorType:   creatorType,
-			CreatorID:     parseUUID(actualCreatorID),
-			ParentIssueID: parentIssueID,
-			Position:      0,
-			StartDate:     startDate,
-			DueDate:       dueDate,
-			Number:        issueNumber,
-			ProjectID:     projectID,
-			OriginType:    originType,
-			OriginID:      originID,
+	// Prefix is workspace-level; pre-compute once so both the broadcast
+	// payload builder and the HTTP response share the same value.
+	prefix := h.getIssuePrefix(r.Context(), wsUUID)
+
+	// Analytics agent ID: assignee agent when the issue is being assigned
+	// to an agent, otherwise the creator agent for agent-authored issues.
+	// Resolved here (not in the service) because creator identity is HTTP-side.
+	analyticsAgentID := ""
+	if assigneeType.Valid && assigneeType.String == "agent" {
+		analyticsAgentID = uuidToString(assigneeID)
+	}
+	if creatorType == "agent" && analyticsAgentID == "" {
+		analyticsAgentID = actualCreatorID
+	}
+
+	buildAttachmentResponses := func(atts []db.Attachment) []AttachmentResponse {
+		if len(atts) == 0 {
+			return nil
+		}
+		out := make([]AttachmentResponse, len(atts))
+		for i, a := range atts {
+			out[i] = h.attachmentToResponse(a)
+		}
+		return out
+	}
+
+	res, err := h.IssueService.Create(r.Context(), service.IssueCreateParams{
+		WorkspaceID:    wsUUID,
+		Title:          req.Title,
+		Description:    ptrToText(req.Description),
+		Status:         status,
+		Priority:       priority,
+		AssigneeType:   assigneeType,
+		AssigneeID:     assigneeID,
+		CreatorType:    creatorType,
+		CreatorID:      parseUUID(actualCreatorID),
+		ParentIssueID:  parentIssueID,
+		ProjectID:      projectID,
+		StartDate:      startDate,
+		DueDate:        dueDate,
+		OriginType:     originType,
+		OriginID:       originID,
+		AttachmentIDs:  attachmentIDs,
+		AllowDuplicate: req.AllowDuplicate,
+	}, service.IssueCreateOpts{
+		ActorID:          actualCreatorID,
+		AnalyticsAgentID: analyticsAgentID,
+		BroadcastPayload: func(issue db.Issue, atts []db.Attachment) map[string]any {
+			payload := issueToResponse(issue, prefix)
+			payload.Attachments = buildAttachmentResponses(atts)
+			return map[string]any{"issue": payload}
+		},
+	})
+
+	if errors.Is(err, service.ErrActiveDuplicate) {
+		dup := *res.DuplicateIssue
+		existing := issueToResponse(dup, h.getIssuePrefix(r.Context(), dup.WorkspaceID))
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"code":  "active_duplicate_issue",
+			"error": duplicateIssueMessage(existing),
+			"issue": existing,
 		})
-	} else {
-		issue, err = qtx.CreateIssue(r.Context(), db.CreateIssueParams{
-			WorkspaceID:   wsUUID,
-			Title:         req.Title,
-			Description:   ptrToText(req.Description),
-			Status:        status,
-			Priority:      priority,
-			AssigneeType:  assigneeType,
-			AssigneeID:    assigneeID,
-			CreatorType:   creatorType,
-			CreatorID:     parseUUID(actualCreatorID),
-			ParentIssueID: parentIssueID,
-			Position:      0,
-			StartDate:     startDate,
-			DueDate:       dueDate,
-			Number:        issueNumber,
-			ProjectID:     projectID,
-		})
+		return
 	}
 	if err != nil {
 		slog.Warn("create issue failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -2082,86 +2072,11 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create issue")
-		return
-	}
-
-	// Link any pre-uploaded attachments to this issue.
-	if len(attachmentIDs) > 0 {
-		h.linkAttachmentsByIssueIDs(r.Context(), issue.ID, issue.WorkspaceID, attachmentIDs)
-	}
-
-	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
-	resp := issueToResponse(issue, prefix)
-
-	// Fetch linked attachments so they appear in the response.
-	if len(attachmentIDs) > 0 {
-		attachments, err := h.Queries.ListAttachmentsByIssue(r.Context(), db.ListAttachmentsByIssueParams{
-			IssueID:     issue.ID,
-			WorkspaceID: issue.WorkspaceID,
-		})
-		if err == nil && len(attachments) > 0 {
-			resp.Attachments = make([]AttachmentResponse, len(attachments))
-			for i, a := range attachments {
-				resp.Attachments[i] = h.attachmentToResponse(a)
-			}
-		}
-	}
-
+	issue := res.Issue
 	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", uuidToString(issue.ID), "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
-	h.publish(protocol.EventIssueCreated, workspaceID, creatorType, actualCreatorID, map[string]any{"issue": resp})
-	analyticsActorID := actualCreatorID
-	analyticsAgentID := ""
-	if issue.AssigneeType.Valid && issue.AssigneeType.String == "agent" {
-		analyticsAgentID = uuidToString(issue.AssigneeID)
-	}
-	if creatorType == "agent" {
-		analyticsActorID = "agent:" + actualCreatorID
-		if analyticsAgentID == "" {
-			analyticsAgentID = actualCreatorID
-		}
-	}
-	analyticsSource := analytics.SourceManual
-	analyticsTaskID := ""
-	analyticsAutopilotRunID := ""
-	if originType.Valid {
-		switch originType.String {
-		case "quick_create":
-			analyticsSource = analytics.SourceManual
-			analyticsTaskID = uuidToString(originID)
-		case "autopilot":
-			analyticsSource = analytics.SourceAutopilot
-			analyticsAutopilotRunID = uuidToString(originID)
-		default:
-			slog.Warn("analytics: unknown issue origin type",
-				"origin_type", originType.String,
-				"issue_id", uuidToString(issue.ID),
-			)
-		}
-	}
-	h.Analytics.Capture(analytics.IssueCreated(
-		analyticsActorID,
-		workspaceID,
-		uuidToString(issue.ID),
-		analyticsAgentID,
-		analyticsTaskID,
-		analyticsAutopilotRunID,
-		analyticsSource,
-	))
 
-	// Enqueue agent task when an agent-assigned issue is created.
-	if issue.AssigneeType.Valid && issue.AssigneeID.Valid {
-		if h.shouldEnqueueAgentTask(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
-		}
-		// Squad assigned at creation: trigger the squad leader (skipping
-		// backlog, same parking-lot semantics as agent assignment).
-		if h.shouldEnqueueSquadLeaderOnAssign(r.Context(), issue) {
-			h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, creatorType, actualCreatorID)
-		}
-	}
-
+	resp := issueToResponse(issue, prefix)
+	resp.Attachments = buildAttachmentResponses(res.Attachments)
 	writeJSON(w, http.StatusCreated, resp)
 }
 
