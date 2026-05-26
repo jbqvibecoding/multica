@@ -1751,6 +1751,200 @@ func TestPrepareCodexHome_RefreshesStaleAuthCopyOnReuse(t *testing.T) {
 	}
 }
 
+// Regression for MUL-2646: when the user updates `~/.codex/config.toml`
+// between two task runs against the same per-task codex-home — e.g. to
+// rotate the active [model_providers.X] base_url or point env_key at a
+// new API key — the per-task copy must refresh from the shared source on
+// Reuse(). Without this, Codex keeps reading the old provider URL / env
+// var on session resume, so the agent hits the new endpoint with the old
+// key and the API rejects the token. Symmetric to issue #2081's fix for
+// the symlinked auth.json (covered above).
+func TestPrepareCodexHome_RefreshesStaleCopiedConfigOnReuse(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv.
+
+	sharedHome := t.TempDir()
+	oldConfig := `model_provider = "old-provider"
+
+[model_providers.old-provider]
+name = "Old"
+base_url = "https://old.example.com"
+env_key = "OLD_API_KEY"
+`
+	if err := os.WriteFile(filepath.Join(sharedHome, "config.toml"), []byte(oldConfig), 0o644); err != nil {
+		t.Fatalf("seed shared config.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedHome, "config.json"), []byte(`{"model":"old-model"}`), 0o644); err != nil {
+		t.Fatalf("seed shared config.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedHome, "instructions.md"), []byte("old instructions"), 0o644); err != nil {
+		t.Fatalf("seed shared instructions.md: %v", err)
+	}
+	t.Setenv("CODEX_HOME", sharedHome)
+
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	if err := prepareCodexHome(codexHome, testLogger()); err != nil {
+		t.Fatalf("first prepareCodexHome: %v", err)
+	}
+
+	// User rotates provider + API key in the shared config between runs.
+	newConfig := `model_provider = "new-provider"
+
+[model_providers.new-provider]
+name = "New"
+base_url = "https://new.example.com"
+env_key = "NEW_API_KEY"
+`
+	if err := os.WriteFile(filepath.Join(sharedHome, "config.toml"), []byte(newConfig), 0o644); err != nil {
+		t.Fatalf("rotate shared config.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedHome, "config.json"), []byte(`{"model":"new-model"}`), 0o644); err != nil {
+		t.Fatalf("rotate shared config.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedHome, "instructions.md"), []byte("new instructions"), 0o644); err != nil {
+		t.Fatalf("rotate shared instructions.md: %v", err)
+	}
+
+	// Resume path: same per-task codex-home, re-prepared.
+	if err := prepareCodexHome(codexHome, testLogger()); err != nil {
+		t.Fatalf("second prepareCodexHome (resume): %v", err)
+	}
+
+	// config.toml must reflect the new provider/URL/env_key.
+	data, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
+	if err != nil {
+		t.Fatalf("read per-task config.toml: %v", err)
+	}
+	s := string(data)
+	for _, want := range []string{`model_provider = "new-provider"`, "https://new.example.com", "NEW_API_KEY"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("per-task config.toml missing %q after refresh, got:\n%s", want, s)
+		}
+	}
+	for _, bad := range []string{"old-provider", "https://old.example.com", "OLD_API_KEY"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("per-task config.toml still contains stale %q after refresh, got:\n%s", bad, s)
+		}
+	}
+	// Daemon-managed sandbox / multi-agent / memory blocks must all be
+	// re-applied on top of the fresh copy — PR correctness depends on it.
+	for _, marker := range []string{
+		multicaManagedBeginMarker,
+		multicaMultiAgentBeginMarker,
+		multicaMemoryFeatureBeginMarker,
+		multicaMemoryConfigBeginMarker,
+	} {
+		if !strings.Contains(s, marker) {
+			t.Errorf("daemon-managed marker %q missing after refresh, got:\n%s", marker, s)
+		}
+	}
+
+	// config.json must reflect the new model.
+	data, err = os.ReadFile(filepath.Join(codexHome, "config.json"))
+	if err != nil {
+		t.Fatalf("read per-task config.json: %v", err)
+	}
+	if string(data) != `{"model":"new-model"}` {
+		t.Errorf("per-task config.json content = %q, want refreshed contents", data)
+	}
+
+	// instructions.md must reflect the new content.
+	data, err = os.ReadFile(filepath.Join(codexHome, "instructions.md"))
+	if err != nil {
+		t.Fatalf("read per-task instructions.md: %v", err)
+	}
+	if string(data) != "new instructions" {
+		t.Errorf("per-task instructions.md content = %q, want refreshed contents", data)
+	}
+}
+
+// Regression for MUL-2646 (deletion arm): when the user removes a file from
+// the shared ~/.codex/ between two task runs — for example by dropping the
+// whole `~/.codex/config.toml`, removing `config.json`, or deleting
+// `instructions.md` — the per-task copy must be dropped too, otherwise
+// session resume keeps replaying a provider / instruction file the user has
+// already removed from the shared config. For config.toml the subsequent
+// daemon-managed ensure* passes recreate a minimal file with only the
+// managed sandbox / multi-agent / memory blocks; for config.json and
+// instructions.md the per-task copy simply disappears.
+func TestPrepareCodexHome_DropsCopiedConfigWhenSharedSourceRemoved(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv.
+
+	sharedHome := t.TempDir()
+	oldConfig := `model_provider = "old-provider"
+
+[model_providers.old-provider]
+name = "Old"
+base_url = "https://old.example.com"
+env_key = "OLD_API_KEY"
+`
+	if err := os.WriteFile(filepath.Join(sharedHome, "config.toml"), []byte(oldConfig), 0o644); err != nil {
+		t.Fatalf("seed shared config.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedHome, "config.json"), []byte(`{"model":"old-model"}`), 0o644); err != nil {
+		t.Fatalf("seed shared config.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedHome, "instructions.md"), []byte("old instructions"), 0o644); err != nil {
+		t.Fatalf("seed shared instructions.md: %v", err)
+	}
+	t.Setenv("CODEX_HOME", sharedHome)
+
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	if err := prepareCodexHome(codexHome, testLogger()); err != nil {
+		t.Fatalf("first prepareCodexHome: %v", err)
+	}
+
+	// Sanity: first prepare seeded all three files into the per-task home.
+	for _, name := range []string{"config.toml", "config.json", "instructions.md"} {
+		if _, err := os.Stat(filepath.Join(codexHome, name)); err != nil {
+			t.Fatalf("first prepare did not seed per-task %s: %v", name, err)
+		}
+	}
+
+	// User removes the shared sources between runs.
+	for _, name := range []string{"config.toml", "config.json", "instructions.md"} {
+		if err := os.Remove(filepath.Join(sharedHome, name)); err != nil {
+			t.Fatalf("remove shared %s: %v", name, err)
+		}
+	}
+
+	// Resume path: same per-task codex-home, re-prepared.
+	if err := prepareCodexHome(codexHome, testLogger()); err != nil {
+		t.Fatalf("second prepareCodexHome (resume): %v", err)
+	}
+
+	// config.json and instructions.md have no daemon-managed default — they
+	// must disappear in lockstep with the shared source.
+	for _, name := range []string{"config.json", "instructions.md"} {
+		if _, err := os.Stat(filepath.Join(codexHome, name)); !os.IsNotExist(err) {
+			t.Errorf("per-task %s still exists after shared source removed (stat err = %v)", name, err)
+		}
+	}
+
+	// config.toml must still exist because the ensure* passes recreate it,
+	// but it must contain only the daemon-managed blocks — no stale user
+	// provider/URL/env_key.
+	data, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
+	if err != nil {
+		t.Fatalf("read per-task config.toml after shared removal: %v", err)
+	}
+	s := string(data)
+	for _, bad := range []string{"old-provider", "https://old.example.com", "OLD_API_KEY"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("per-task config.toml still contains stale %q after shared source removed, got:\n%s", bad, s)
+		}
+	}
+	for _, marker := range []string{
+		multicaManagedBeginMarker,
+		multicaMultiAgentBeginMarker,
+		multicaMemoryFeatureBeginMarker,
+		multicaMemoryConfigBeginMarker,
+	} {
+		if !strings.Contains(s, marker) {
+			t.Errorf("daemon-managed marker %q missing after shared source removed, got:\n%s", marker, s)
+		}
+	}
+}
+
 func TestEnsureCodexSandboxConfigCreatesDefaultLinux(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -2453,145 +2647,6 @@ func TestPrepareCodexResolvesUserSkillSymlinks(t *testing.T) {
 	}
 	if string(data) != "lark" {
 		t.Errorf("seeded SKILL.md = %q, want %q", data, "lark")
-	}
-}
-
-// TestPrepareCodexSkillsLocalIgnoreSkipsUserSeed covers the per-agent
-// `skills_local=ignore` contract on the Codex side (MUL-2603): when the
-// agent opts out of host-machine skills, the daemon must not seed
-// `~/.codex/skills/` into the per-task CODEX_HOME, so a broken local skill
-// cannot crash a shared Codex agent. The default (`merge`) preserves the
-// pre-existing seed-from-shared behavior — covered by
-// TestPrepareCodexSeedsUserSkills above.
-func TestPrepareCodexSkillsLocalIgnoreSkipsUserSeed(t *testing.T) {
-	// Cannot use t.Parallel() with t.Setenv.
-
-	sharedHome := t.TempDir()
-	t.Setenv("CODEX_HOME", sharedHome)
-
-	userSkills := filepath.Join(sharedHome, "skills")
-	if err := os.MkdirAll(filepath.Join(userSkills, "summarize"), 0o755); err != nil {
-		t.Fatalf("seed user skill dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(userSkills, "summarize", "SKILL.md"), []byte("user summarize"), 0o644); err != nil {
-		t.Fatalf("seed user SKILL.md: %v", err)
-	}
-
-	env, err := Prepare(PrepareParams{
-		WorkspacesRoot: t.TempDir(),
-		WorkspaceID:    "ws-codex-skills-local-ignore",
-		TaskID:         "c1d2e3f4-a5b6-7890-cdef-123456789012",
-		AgentName:      "Codex Agent",
-		Provider:       "codex",
-		SkillsLocal:    "ignore",
-		Task: TaskContextForEnv{
-			IssueID: "codex-skills-local-ignore-test",
-			AgentSkills: []SkillContextForEnv{
-				{Name: "Writing", Content: "workspace writing"},
-			},
-		},
-	}, testLogger())
-	if err != nil {
-		t.Fatalf("Prepare failed: %v", err)
-	}
-	defer env.Cleanup(true)
-
-	if _, err := os.Stat(filepath.Join(env.CodexHome, "skills", "summarize")); !os.IsNotExist(err) {
-		t.Errorf("user skill seeded despite skills_local=ignore: err=%v", err)
-	}
-	if _, err := os.Stat(filepath.Join(env.CodexHome, "skills", "writing", "SKILL.md")); err != nil {
-		t.Errorf("workspace skill not written under skills_local=ignore: %v", err)
-	}
-}
-
-// TestPrepareCodexSkillsLocalMergeSeedsUserSkills locks in the default
-// `merge` semantics on the Codex side: anything other than the literal
-// "ignore" (including empty from older servers) preserves the seed-from-
-// shared behavior so existing personal workflows continue working.
-func TestPrepareCodexSkillsLocalMergeSeedsUserSkills(t *testing.T) {
-	// Cannot use t.Parallel() with t.Setenv.
-
-	sharedHome := t.TempDir()
-	t.Setenv("CODEX_HOME", sharedHome)
-
-	userSkills := filepath.Join(sharedHome, "skills")
-	if err := os.MkdirAll(filepath.Join(userSkills, "translate"), 0o755); err != nil {
-		t.Fatalf("seed user skill dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(userSkills, "translate", "SKILL.md"), []byte("user translate"), 0o644); err != nil {
-		t.Fatalf("seed user SKILL.md: %v", err)
-	}
-
-	env, err := Prepare(PrepareParams{
-		WorkspacesRoot: t.TempDir(),
-		WorkspaceID:    "ws-codex-skills-local-merge",
-		TaskID:         "d2e3f4a5-b6c7-8901-cdef-234567890123",
-		AgentName:      "Codex Agent",
-		Provider:       "codex",
-		SkillsLocal:    "merge",
-		Task:           TaskContextForEnv{IssueID: "codex-skills-local-merge-test"},
-	}, testLogger())
-	if err != nil {
-		t.Fatalf("Prepare failed: %v", err)
-	}
-	defer env.Cleanup(true)
-
-	data, err := os.ReadFile(filepath.Join(env.CodexHome, "skills", "translate", "SKILL.md"))
-	if err != nil {
-		t.Fatalf("user skill not seeded under skills_local=merge: %v", err)
-	}
-	if string(data) != "user translate" {
-		t.Errorf("seeded user SKILL.md = %q, want %q", data, "user translate")
-	}
-}
-
-// TestReuseCodexSkillsLocalIgnoreSkipsUserSeed mirrors the Prepare path on
-// the Reuse branch: if a user flips the agent toggle to `ignore` between
-// runs, the next task on the reused workdir must drop the previously-seeded
-// user skill rather than leak it through.
-func TestReuseCodexSkillsLocalIgnoreSkipsUserSeed(t *testing.T) {
-	// Cannot use t.Parallel() with t.Setenv.
-
-	sharedHome := t.TempDir()
-	t.Setenv("CODEX_HOME", sharedHome)
-
-	userSkills := filepath.Join(sharedHome, "skills")
-	if err := os.MkdirAll(filepath.Join(userSkills, "summarize"), 0o755); err != nil {
-		t.Fatalf("seed user skill dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(userSkills, "summarize", "SKILL.md"), []byte("user summarize"), 0o644); err != nil {
-		t.Fatalf("seed user SKILL.md: %v", err)
-	}
-
-	env, err := Prepare(PrepareParams{
-		WorkspacesRoot: t.TempDir(),
-		WorkspaceID:    "ws-codex-reuse-toggle",
-		TaskID:         "e3f4a5b6-c7d8-9012-cdef-345678901234",
-		AgentName:      "Codex Agent",
-		Provider:       "codex",
-		SkillsLocal:    "merge",
-		Task:           TaskContextForEnv{IssueID: "codex-reuse-toggle-test"},
-	}, testLogger())
-	if err != nil {
-		t.Fatalf("Prepare failed: %v", err)
-	}
-	defer env.Cleanup(true)
-
-	if _, err := os.Stat(filepath.Join(env.CodexHome, "skills", "summarize", "SKILL.md")); err != nil {
-		t.Fatalf("Prepare(merge) did not seed user skill: %v", err)
-	}
-
-	reused := Reuse(ReuseParams{
-		WorkDir:     env.WorkDir,
-		Provider:    "codex",
-		SkillsLocal: "ignore",
-		Task:        TaskContextForEnv{IssueID: "codex-reuse-toggle-test"},
-	}, testLogger())
-	if reused == nil {
-		t.Fatal("Reuse returned nil")
-	}
-	if _, err := os.Stat(filepath.Join(reused.CodexHome, "skills", "summarize")); !os.IsNotExist(err) {
-		t.Errorf("user skill survived Reuse(skills_local=ignore): err=%v", err)
 	}
 }
 

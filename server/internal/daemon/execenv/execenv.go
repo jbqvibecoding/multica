@@ -39,13 +39,6 @@ type PrepareParams struct {
 	Provider       string // agent provider (determines runtime config and skill injection paths)
 	CodexVersion   string // detected Codex CLI version (only used when Provider == "codex")
 	OpenclawBin    string // resolved openclaw CLI path (only used when Provider == "openclaw"); empty = look up on PATH
-	// SkillsLocal mirrors agent.SkillsLocal. "ignore" instructs runtime
-	// setup steps that the daemon controls (currently Codex's user-skill
-	// seed) to skip injecting the host machine's user-global skills into
-	// the per-task environment. Any other value — including "merge" and
-	// the empty string from older servers / clients — preserves the
-	// inherit-from-host behavior.
-	SkillsLocal string
 	// LocalWorkDir, when non-empty, redirects the agent's working directory
 	// to a user-supplied absolute path instead of the synthesised envRoot/
 	// workdir. The path is NOT copied or mounted — the agent operates on
@@ -207,7 +200,7 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion}, logger); err != nil {
 			return nil, fmt.Errorf("execenv: prepare codex-home: %w", err)
 		}
-		if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, params.SkillsLocal, logger); err != nil {
+		if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, logger); err != nil {
 			return nil, fmt.Errorf("execenv: hydrate codex skills: %w", err)
 		}
 		env.CodexHome = codexHome
@@ -240,11 +233,6 @@ type ReuseParams struct {
 	Provider     string
 	CodexVersion string // only used when Provider == "codex"
 	OpenclawBin  string // only used when Provider == "openclaw"; empty = PATH lookup
-	// SkillsLocal mirrors PrepareParams.SkillsLocal. Reuse must respect
-	// the same gate so a workdir resurrected on a later task picks up the
-	// current agent setting (the user may have flipped the toggle between
-	// runs).
-	SkillsLocal string
 	// LocalDirectory is true when the reused WorkDir is a user-supplied
 	// directory (the local_directory flow). The flag is propagated into
 	// the returned Environment so downstream callers (notably the GC
@@ -295,7 +283,7 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 			logger.Warn("execenv: refresh codex-home failed", "error", err)
 		} else {
 			env.CodexHome = codexHome
-			if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, params.SkillsLocal, logger); err != nil {
+			if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, logger); err != nil {
 				logger.Warn("execenv: refresh codex skills failed", "error", err)
 			}
 		}
@@ -336,26 +324,17 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 //     run — its old contents would otherwise remain visible to the codex
 //     CLI.
 //
-// When skillsLocal == "ignore" the user-skill seed is skipped, so the
-// per-task CODEX_HOME exposes only workspace skills to the codex CLI. This
-// is the Codex-side enforcement of the per-agent `skills_local` toggle —
-// the Claude backend enforces the same contract by mirroring `~/.claude/`
-// minus `skills/` (see server/pkg/agent/claude.go).
-//
-// Codex is the only runtime besides Claude where the daemon actively
-// manages user-skill discovery: Codex via CODEX_HOME and the seed step
-// here, Claude via CLAUDE_CONFIG_DIR scratch mirroring. Other runtimes
-// leave HOME untouched and discover user-level skills natively (see
-// context.go for the workdir-local paths they use for workspace skills),
-// so `skills_local` is a no-op for them today.
-func hydrateCodexSkills(codexHome string, workspaceSkills []SkillContextForEnv, skillsLocal string, logger *slog.Logger) error {
+// Codex is the only runtime that needs this two-stage hydration because the
+// daemon sets CODEX_HOME to a per-task directory, isolating the CLI from the
+// user's real ~/.codex/. Other runtimes leave HOME untouched and discover
+// user-level skills natively (see context.go for the workdir-local paths
+// they use for workspace skills).
+func hydrateCodexSkills(codexHome string, workspaceSkills []SkillContextForEnv, logger *slog.Logger) error {
 	skillsDir := filepath.Join(codexHome, "skills")
 	if err := os.RemoveAll(skillsDir); err != nil {
 		return fmt.Errorf("clear codex skills dir: %w", err)
 	}
-	if skillsLocal == "ignore" {
-		logger.Info("execenv: codex user-skill seed skipped (skills_local=ignore)")
-	} else if err := seedUserCodexSkills(codexHome, workspaceSkills, logger); err != nil {
+	if err := seedUserCodexSkills(codexHome, workspaceSkills, logger); err != nil {
 		logger.Warn("execenv: seed user codex skills failed", "error", err)
 	}
 	if len(workspaceSkills) == 0 {

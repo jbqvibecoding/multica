@@ -40,7 +40,7 @@ The daemon auto-detects which CLIs are available on your PATH and registers them
 
 Multica supports two layers of skills:
 
-- **Local skills** — Skills already installed in your local runtime (e.g., `.claude/skills/`, `.opencode/skills/`). For Claude Code and Codex, host-machine skills under `~/.claude/skills/` and `~/.codex/skills/` are **merged by default** for each agent (so existing personal workflows keep working) — toggle the per-agent **Allow host-machine Skills** switch off to isolate a shared agent against a broken local skill on one operator's machine (GitHub #3052). Other runtimes ignore this setting — the daemon does not actively manage user-level skill discovery for them today.
+- **Local skills** — Skills already installed in your local runtime (e.g., `.claude/skills/`, `.opencode/skills/`) are automatically discovered and used by agents. You do **not** need to upload them to Multica.
 - **Workspace skills** — Skills created or imported in the Multica Skills page are shared across the workspace. They are automatically injected into agent runs as supplementary context, so every team member's agents benefit from them.
 
 Workspace skills are designed for team-wide sharing and collaboration — codify your team's best practices once, and every agent can leverage them:

@@ -2432,10 +2432,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if provider == "openclaw" {
 		openclawBin = entry.Path
 	}
-	envSkillsLocal := ""
-	if task.Agent != nil {
-		envSkillsLocal = task.Agent.SkillsLocal
-	}
 	// Resolve any local_directory assignment again here so runTask can plumb
 	// LocalWorkDir into execenv. handleTask already validated + locked the
 	// path; this call is a pure JSON parse over the same task payload.
@@ -2450,7 +2446,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Provider:     provider,
 			CodexVersion: codexVersion,
 			OpenclawBin:  openclawBin,
-			SkillsLocal:  envSkillsLocal,
 			Task:         taskCtx,
 		}, d.logger)
 	}
@@ -2464,7 +2459,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Provider:       provider,
 			CodexVersion:   codexVersion,
 			OpenclawBin:    openclawBin,
-			SkillsLocal:    envSkillsLocal,
 			Task:           taskCtx,
 		}
 		if localAssignment != nil {
@@ -2655,10 +2649,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			thinkingLevel = ""
 		}
 	}
-	skillsLocal := ""
-	if task.Agent != nil {
-		skillsLocal = task.Agent.SkillsLocal
-	}
 	execOpts := agent.ExecOptions{
 		Cwd:                       env.WorkDir,
 		Model:                     model,
@@ -2669,7 +2659,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		CustomArgs:                customArgs,
 		McpConfig:                 mcpConfig,
 		ThinkingLevel:             thinkingLevel,
-		SkillsLocal:               skillsLocal,
 	}
 	// Some providers do not reliably load the per-task runtime config files we
 	// write into the task workdir:

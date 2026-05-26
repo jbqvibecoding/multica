@@ -312,7 +312,7 @@ const animateLayoutChanges: AnimateLayoutChanges = (args) => {
   return defaultAnimateLayoutChanges(args);
 };
 
-export const DraggableBoardCard = memo(function DraggableBoardCard({ issue, childProgress }: { issue: Issue; childProgress?: ChildProgress }) {
+export const DraggableBoardCard = memo(function DraggableBoardCard({ issue, childProgress, disableSorting }: { issue: Issue; childProgress?: ChildProgress; disableSorting?: boolean }) {
   const p = useWorkspacePaths();
   const {
     attributes,
@@ -325,6 +325,7 @@ export const DraggableBoardCard = memo(function DraggableBoardCard({ issue, chil
     id: issue.id,
     data: { status: issue.status },
     animateLayoutChanges,
+    disabled: disableSorting ? { droppable: true } : undefined,
   });
 
   const style = {

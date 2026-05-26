@@ -227,10 +227,6 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 			CustomArgs:         []byte("[]"),
 			McpConfig:          nil,
 			Model:              pgtype.Text{},
-			// skills_local has a NOT NULL CHECK ('ignore' | 'merge'); the Go
-			// zero value "" would trip the constraint rather than fall back to
-			// the column default. Match the public CreateAgent default.
-			SkillsLocal: "merge",
 		})
 		if err != nil {
 			slog.Warn("bootstrap onboarding (shim): create assistant failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", req.WorkspaceID)...)

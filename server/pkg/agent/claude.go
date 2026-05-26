@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -67,51 +66,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}
-
-	// Skill isolation. The platform default is "merge" — the CLI walks
-	// `~/.claude/` directly, including its `skills/`, so existing personal
-	// workflows that rely on locally installed Claude skills keep working
-	// out of the box. The agent owner can opt into "ignore" when a shared
-	// agent must be hardened against a broken local skill on one operator's
-	// machine, which otherwise crashes the CLI before it reads stdin
-	// (GitHub #3052: silent "broken pipe" exits).
-	//
-	// In "ignore" mode we point CLAUDE_CONFIG_DIR at a per-run scratch dir
-	// that mirrors `~/.claude/` as symlinks — except for `skills/`, which
-	// is omitted so the CLI cannot discover the host user's
-	// `~/.claude/skills/`. Everything else under `~/.claude/` — including
-	// the Linux/Windows `.credentials.json` login token, `settings.json`,
-	// `agents/`, `commands/`, `plugins/`, etc. — is symlinked through so
-	// Claude authentication and global config keep working without an
-	// `ANTHROPIC_API_KEY`. Workspace skills (`{cwd}/.claude/skills/`) load
-	// from cwd regardless and are not affected by either mode.
-	isolateClaudeConfig := opts.SkillsLocal == "ignore"
-	var claudeConfigDir string
-	var claudeConfigCleanup func()
-	if isolateClaudeConfig {
-		// Resolve the *effective* Claude config source before we strip
-		// CLAUDE_CONFIG_DIR from the child env in buildClaudeEnv.
-		// Precedence: agent custom_env > parent process env > `~/.claude`.
-		// Mirroring `~/.claude` blindly when the operator has explicitly
-		// pointed Claude at a different config dir (e.g. a managed install)
-		// would copy the wrong credentials into the scratch dir and break
-		// auth — see the second Must Fix in MUL-2603 review.
-		hostConfigDir := resolveHostClaudeConfigDir(b.cfg.Env)
-		dir, cleanup, err := newIsolatedClaudeConfigDir(opts.Cwd, hostConfigDir, b.cfg.Logger)
-		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("isolate claude config dir: %w", err)
-		}
-		claudeConfigDir = dir
-		claudeConfigCleanup = cleanup
-	}
-	defer func() {
-		if claudeConfigCleanup != nil {
-			claudeConfigCleanup()
-		}
-	}()
-
-	cmd.Env = buildClaudeEnv(b.cfg.Env, claudeConfigDir)
+	cmd.Env = buildEnv(b.cfg.Env)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -156,14 +111,10 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	}
 	closeStdin()
 
-	b.cfg.Logger.Info("claude started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model, "skills_local", opts.SkillsLocal, "claude_config_dir", claudeConfigDir)
+	b.cfg.Logger.Info("claude started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model)
 
 	// cmd.Start() succeeded — transfer temp file ownership to the goroutine.
 	mcpFileCleanup = nil
-	// Transfer isolated-config cleanup the same way: the goroutine outlives
-	// this function, so it owns removal of the scratch dir.
-	isolatedConfigCleanup := claudeConfigCleanup
-	claudeConfigCleanup = nil
 
 	msgCh := make(chan Message, 256)
 	resCh := make(chan Result, 1)
@@ -174,9 +125,6 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		defer close(resCh)
 		if mcpConfigPath != "" {
 			defer os.Remove(mcpConfigPath)
-		}
-		if isolatedConfigCleanup != nil {
-			defer isolatedConfigCleanup()
 		}
 
 		startTime := time.Now()
@@ -619,31 +567,6 @@ func buildEnv(extra map[string]string) []string {
 	return mergeEnv(os.Environ(), extra)
 }
 
-// buildClaudeEnv builds the env slice for the claude subprocess. When
-// claudeConfigDir is non-empty (isolated-skills mode), it overrides
-// CLAUDE_CONFIG_DIR for the child so the CLI looks at the per-task
-// scratch dir instead of `~/.claude/`. We also strip the parent's
-// CLAUDE_CONFIG_DIR so a daemon-host env var cannot accidentally win
-// the override race. Callers in "merge" mode pass "" and behaviour
-// matches the pre-MUL-2603 buildEnv path.
-func buildClaudeEnv(extra map[string]string, claudeConfigDir string) []string {
-	env := mergeEnv(os.Environ(), extra)
-	if claudeConfigDir == "" {
-		return env
-	}
-	// Drop any CLAUDE_CONFIG_DIR already in the slice (from os.Environ or
-	// from custom_env) before appending the isolated override so the last
-	// entry wins deterministically.
-	filtered := env[:0]
-	for _, entry := range env {
-		if strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") {
-			continue
-		}
-		filtered = append(filtered, entry)
-	}
-	return append(filtered, "CLAUDE_CONFIG_DIR="+claudeConfigDir)
-}
-
 func mergeEnv(base []string, extra map[string]string) []string {
 	env := make([]string, 0, len(base)+len(extra))
 	for _, entry := range base {
@@ -664,175 +587,6 @@ func isFilteredChildEnvKey(key string) bool {
 		strings.HasPrefix(key, "CLAUDECODE_") ||
 		strings.HasPrefix(key, "CLAUDE_CODE_")
 }
-
-// resolveHostClaudeConfigDir picks the directory we mirror into the per-task
-// scratch CLAUDE_CONFIG_DIR. Precedence:
-//
-//  1. Agent custom_env CLAUDE_CONFIG_DIR (operator pinned this agent at a
-//     specific install — e.g. a managed shared profile).
-//  2. Parent process CLAUDE_CONFIG_DIR (daemon-host env var; some self-host
-//     deployments set this globally so `claude login` writes there instead
-//     of `~/.claude`).
-//  3. `~/.claude/` (the documented default for Linux/Windows; macOS keeps
-//     credentials in Keychain so the dir still holds settings/agents/etc.).
-//
-// Returns "" when none of the above are usable (no env, no home dir). The
-// caller treats that as "host has no Claude config to mirror" — the scratch
-// dir stays empty and the CLI relies on `ANTHROPIC_API_KEY` auth.
-func resolveHostClaudeConfigDir(extraEnv map[string]string) string {
-	if v, ok := extraEnv["CLAUDE_CONFIG_DIR"]; ok && v != "" {
-		return v
-	}
-	if v := os.Getenv("CLAUDE_CONFIG_DIR"); v != "" {
-		return v
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".claude")
-}
-
-// newIsolatedClaudeConfigDir creates a per-run scratch directory used as
-// CLAUDE_CONFIG_DIR when the agent opted out of host-machine skill merging.
-// The dir is placed under the task workdir when available so it lives and
-// dies with the task's storage allocation; otherwise it falls back to the
-// OS temp dir.
-//
-// The dir is NOT empty: every entry from the effective host Claude config
-// (resolveHostClaudeConfigDir) is mirrored through *except* `skills/`. That
-// preserves Claude Code's login state (`.credentials.json` on Linux/Windows),
-// global settings, plugins, agents, commands, output styles, todos, etc. —
-// which all live in this directory and would otherwise be invisible to the
-// isolated child — while still keeping the user-global skills directory off
-// the CLI's discovery path. Without this passthrough, opting into "ignore"
-// mode on a non-API-key host would force the Claude agent to re-authenticate,
-// breaking the documented "run `claude` once to log in" install flow.
-//
-// Each entry uses createDirLink / createFileLink, which try symlink first
-// and fall back to a directory junction (Windows `mklink /J`) for dirs or a
-// hardlink/copy for files when the platform rejects the symlink (Windows
-// without Developer Mode / admin). Failing silently to symlink-only would
-// leave Windows hosts with an empty scratch dir, defeating the auth
-// passthrough — see MUL-2603 review.
-//
-// The returned cleanup removes the scratch directory; symlinks, junctions,
-// and hardlinks are unlinked without touching the real host file. Safe to
-// call from any goroutine exactly once.
-func newIsolatedClaudeConfigDir(taskCwd, hostConfigDir string, logger *slog.Logger) (string, func(), error) {
-	parent := taskCwd
-	if parent == "" {
-		parent = os.TempDir()
-	}
-	dir, err := os.MkdirTemp(parent, "multica-claude-config-*")
-	if err != nil {
-		// Fall back to the OS temp dir if the cwd refused us (read-only
-		// volume, missing parent, etc.). A scratch dir somewhere on the
-		// host is still strictly better than letting the CLI auto-discover
-		// `~/.claude/skills/`.
-		if parent != os.TempDir() {
-			dir, err = os.MkdirTemp(os.TempDir(), "multica-claude-config-*")
-		}
-		if err != nil {
-			return "", nil, err
-		}
-	}
-
-	if hostConfigDir != "" {
-		// Best effort. If the host config dir is missing entirely (env-var-
-		// auth-only setup) we just leave the scratch dir empty. If individual
-		// entries fail to mirror — even after fallback — we log so operators
-		// can correlate Claude Code auth failures with the missing mirror,
-		// but we do not abort: a partial mirror is still better than letting
-		// the CLI discover `~/.claude/skills/` directly.
-		if err := mirrorHostClaudeExceptSkills(hostConfigDir, dir); err != nil && logger != nil {
-			logger.Warn("claude: mirror host config dir failed",
-				"source", hostConfigDir,
-				"dest", dir,
-				"error", err,
-			)
-		}
-	}
-
-	cleanup := func() {
-		// Best effort — caller logs through normal channels if cleanup fails
-		// (a leftover scratch dir is non-fatal; the GC sweeper that reclaims
-		// orphaned task workdirs will catch it too). RemoveAll unlinks
-		// symlinks / junctions without following them, so the real host
-		// `~/.claude/` is not touched. Hardlinks share inodes so unlinking
-		// the mirror entry leaves the source file with refcount 1.
-		_ = os.RemoveAll(dir)
-	}
-	return dir, cleanup, nil
-}
-
-// mirrorHostClaudeExceptSkills mirrors every direct entry under
-// hostClaudeDir into destDir, skipping `skills/`. Each entry tries a
-// symlink first and falls back to a directory junction (Windows
-// `mklink /J`) or a hardlink/copy (Windows without Developer Mode) so the
-// mirror still works on hosts that lack SeCreateSymbolicLinkPrivilege. The
-// first per-entry error is returned so callers can log it; we do not abort
-// the loop, because the goal — keeping `skills/` out of the CLI's discovery
-// path — is met as soon as we own the scratch dir, and a partial mirror is
-// still better than no isolation.
-func mirrorHostClaudeExceptSkills(hostClaudeDir, destDir string) error {
-	return mirrorHostClaudeExceptSkillsWith(hostClaudeDir, destDir, createDirLink, createFileLink)
-}
-
-// mirrorHostClaudeExceptSkillsWith is the testable seam behind
-// mirrorHostClaudeExceptSkills. Tests inject custom dirLink / fileLink
-// closures to exercise the symlink-failure fallback path on platforms
-// (Linux/macOS) where os.Symlink would otherwise always succeed.
-func mirrorHostClaudeExceptSkillsWith(
-	hostClaudeDir, destDir string,
-	dirLink, fileLink func(src, dst string) error,
-) error {
-	entries, err := os.ReadDir(hostClaudeDir)
-	if err != nil {
-		return err
-	}
-	var firstErr error
-	for _, entry := range entries {
-		if entry.Name() == "skills" {
-			continue
-		}
-		src := filepath.Join(hostClaudeDir, entry.Name())
-		dst := filepath.Join(destDir, entry.Name())
-		var linkErr error
-		if entry.IsDir() {
-			linkErr = dirLink(src, dst)
-		} else {
-			linkErr = fileLink(src, dst)
-		}
-		if linkErr != nil && firstErr == nil {
-			firstErr = fmt.Errorf("link %s: %w", entry.Name(), linkErr)
-		}
-	}
-	return firstErr
-}
-
-// copyFile copies the bytes of src into dst with a fresh file. Used as the
-// last-resort fallback inside createFileLink on Windows when both symlink
-// and hardlink are unavailable. Kept in the platform-agnostic file so the
-// Unix build still compiles (it never calls copyFile, but the symbol must
-// exist for the test fallback seam to be exercisable on Linux/macOS).
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", src, err)
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", dst, err)
-	}
-	defer out.Close()
-	if _, err := io.Copy(out, in); err != nil {
-		return fmt.Errorf("copy %s → %s: %w", src, dst, err)
-	}
-	return nil
-}
-
 
 // blockedArgMode specifies whether a blocked arg takes a value or is standalone.
 type blockedArgMode int
