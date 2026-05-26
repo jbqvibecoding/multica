@@ -298,9 +298,8 @@
       "save_failed_toast": "Failed to save custom arguments"
     },
     "skills": {
-      "intro": "Workspace skills assigned to this agent. For Claude Code and Codex, the host machine's user-global skill directory is merged by default — switch the toggle below off to isolate this agent from those host-machine skills. Other runtimes ignore this setting.",
+      "intro": "Workspace skills assigned to this agent. Every runtime loads them.",
       "add_action": "Add skill",
-      "import_hint": "Importing creates a workspace copy that your team can edit and reuse.",
       "local_label": "Allow locally installed skills",
       "local_hint_off": "Off — for Claude Code and Codex, the agent ignores the host machine's user-global skill directory (~/.claude/skills/, ~/.codex/skills/). Recommended for shared agents — a broken local skill on one operator's machine cannot crash this agent. Other runtimes ignore this setting.",
       "local_hint_on": "On (default) — for Claude Code and Codex, the host machine's user-global skill directory is merged alongside workspace skills. Other runtimes ignore this setting.",

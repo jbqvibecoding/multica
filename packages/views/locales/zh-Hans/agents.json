@@ -292,9 +292,8 @@
       "save_failed_toast": "保存自定义参数失败"
     },
     "skills": {
-      "intro": "分配给该智能体的工作区 skill。对 Claude Code 与 Codex，默认会同时合并本机用户级 skill 目录 —— 把下方开关关闭可以让该智能体与本机用户级 skill 隔离。其它运行时会忽略此设置。",
+      "intro": "分配给该智能体的工作区 skill。所有运行时都会加载。",
       "add_action": "添加 skill",
-      "import_hint": "导入会在工作区创建一份副本，团队可以编辑和复用。",
       "local_label": "允许使用本机已安装的 Skill",
       "local_hint_off": "关闭 —— 对 Claude Code 与 Codex，智能体会忽略本机用户级 skill 目录（~/.claude/skills/、~/.codex/skills/）。推荐用于共享智能体 —— 团队成员机器上有问题的本机 skill 不会拖崩这个智能体。其它运行时会忽略此设置。",
       "local_hint_on": "开启（默认）—— 对 Claude Code 与 Codex，运行时会同时合并本机用户级 skill 目录。其它运行时会忽略此设置。",
