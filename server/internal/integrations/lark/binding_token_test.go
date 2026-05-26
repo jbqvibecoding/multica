@@ -1,8 +1,12 @@
 package lark
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // These tests cover the pure-Go halves of BindingTokenService — token
@@ -41,6 +45,45 @@ func TestRandomTokenURLSafe(t *testing.T) {
 	}
 	if strings.Contains(tok, "=") {
 		t.Fatalf("RawURLEncoding should drop padding, got %q", tok)
+	}
+}
+
+// TestRedeemAndBindRequiresTxStarter guards the constructor-misuse
+// path: if a future refactor wires up BindingTokenService without a
+// TxStarter (e.g. for a legacy code path that only needed Mint),
+// RedeemAndBind must fail fast with a clear error rather than panic
+// on the nil dereference at s.tx.Begin. The atomicity contract
+// documented above depends on that transaction existing.
+func TestRedeemAndBindRequiresTxStarter(t *testing.T) {
+	svc := &BindingTokenService{}
+	_, err := svc.RedeemAndBind(context.Background(), "tok", pgtype.UUID{})
+	if err == nil {
+		t.Fatal("expected error when TxStarter is nil, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing TxStarter") {
+		t.Fatalf("expected missing-TxStarter error, got %v", err)
+	}
+}
+
+// TestBindingErrorSentinelsAreDistinct guards against accidentally
+// collapsing the three rejection sentinels (e.g. someone making
+// ErrBindingNotWorkspaceMember an alias of ErrBindingTokenInvalid to
+// "hide" the workspace-membership signal). The HTTP handler maps
+// each to a distinct status code (410/409/403); if errors.Is started
+// matching the wrong sentinel, the response code would silently
+// regress without any other test catching it.
+func TestBindingErrorSentinelsAreDistinct(t *testing.T) {
+	if errors.Is(ErrBindingAlreadyAssigned, ErrBindingTokenInvalid) ||
+		errors.Is(ErrBindingTokenInvalid, ErrBindingAlreadyAssigned) {
+		t.Fatal("ErrBindingAlreadyAssigned and ErrBindingTokenInvalid must not alias")
+	}
+	if errors.Is(ErrBindingNotWorkspaceMember, ErrBindingTokenInvalid) ||
+		errors.Is(ErrBindingTokenInvalid, ErrBindingNotWorkspaceMember) {
+		t.Fatal("ErrBindingNotWorkspaceMember and ErrBindingTokenInvalid must not alias")
+	}
+	if errors.Is(ErrBindingAlreadyAssigned, ErrBindingNotWorkspaceMember) ||
+		errors.Is(ErrBindingNotWorkspaceMember, ErrBindingAlreadyAssigned) {
+		t.Fatal("ErrBindingAlreadyAssigned and ErrBindingNotWorkspaceMember must not alias")
 	}
 }
 
