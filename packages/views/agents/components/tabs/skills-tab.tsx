@@ -4,7 +4,7 @@ import { useState } from "react";
 import { FileText, Info, Plus, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { Agent, AgentSkillsLocal } from "@multica/core/types";
+import type { Agent } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
@@ -13,7 +13,6 @@ import {
 } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { SkillAddDialog } from "../skill-add-dialog";
-import { SkillsLocalToggle } from "../skills-local-toggle";
 import { useT } from "../../../i18n";
 
 export function SkillsTab({
@@ -24,12 +23,6 @@ export function SkillsTab({
   const { t } = useT("agents");
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
-  // Default missing values to "merge". Older backends omit the field
-  // entirely; the documented platform default wins on drift (see
-  // AgentSkillsLocal — "ignore" is the explicit hardening opt-in).
-  const currentSkillsLocal: AgentSkillsLocal =
-    agent.skills_local === "ignore" ? "ignore" : "merge";
-  const [skillsLocalSaving, setSkillsLocalSaving] = useState(false);
   // Same query the SkillAddDialog uses (TanStack Query dedupes by key, so
   // this isn't an extra request) — used here only to grey out the "Add
   // skill" button when the workspace has zero skills total. When skills
@@ -40,24 +33,6 @@ export function SkillsTab({
   const { data: workspaceSkills = [] } = useQuery(skillListOptions(wsId));
   const [removing, setRemoving] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
-
-  const handleSkillsLocalChange = async (next: AgentSkillsLocal) => {
-    if (next === currentSkillsLocal || skillsLocalSaving) return;
-    setSkillsLocalSaving(true);
-    try {
-      await api.updateAgent(agent.id, { skills_local: next });
-      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
-      toast.success(t(($) => $.tab_body.skills.local_saved_toast));
-    } catch (e) {
-      toast.error(
-        e instanceof Error
-          ? e.message
-          : t(($) => $.tab_body.skills.local_save_failed_toast),
-      );
-    } finally {
-      setSkillsLocalSaving(false);
-    }
-  };
 
   const handleRemove = async (skillId: string) => {
     setRemoving(true);
@@ -98,14 +73,6 @@ export function SkillsTab({
           {t(($) => $.tab_body.skills.import_hint)}
         </p>
       </div>
-
-      <SkillsLocalToggle
-        value={currentSkillsLocal}
-        onChange={handleSkillsLocalChange}
-        disabled={skillsLocalSaving}
-        hintScope="tab"
-      />
-
 
       {agent.skills.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-12">

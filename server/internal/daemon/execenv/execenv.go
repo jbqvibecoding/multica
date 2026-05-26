@@ -32,21 +32,14 @@ type ProjectResourceForEnv struct {
 
 // PrepareParams holds all inputs needed to set up an execution environment.
 type PrepareParams struct {
-	WorkspacesRoot string // base path for all envs (e.g., ~/multica_workspaces)
-	WorkspaceID    string // workspace UUID — tasks are grouped under this
-	TaskID         string // task UUID — used for directory name
-	AgentName      string // for git branch naming only
-	Provider       string // agent provider (determines runtime config and skill injection paths)
-	CodexVersion   string // detected Codex CLI version (only used when Provider == "codex")
-	OpenclawBin    string // resolved openclaw CLI path (only used when Provider == "openclaw"); empty = look up on PATH
-	// SkillsLocal mirrors agent.SkillsLocal. "ignore" instructs runtime
-	// setup steps that the daemon controls (currently Codex's user-skill
-	// seed) to skip injecting the host machine's user-global skills into
-	// the per-task environment. Any other value — including "merge" and
-	// the empty string from older servers / clients — preserves the
-	// inherit-from-host behavior.
-	SkillsLocal string
-	Task        TaskContextForEnv // context data for writing files
+	WorkspacesRoot string            // base path for all envs (e.g., ~/multica_workspaces)
+	WorkspaceID    string            // workspace UUID — tasks are grouped under this
+	TaskID         string            // task UUID — used for directory name
+	AgentName      string            // for git branch naming only
+	Provider       string            // agent provider (determines runtime config and skill injection paths)
+	CodexVersion   string            // detected Codex CLI version (only used when Provider == "codex")
+	OpenclawBin    string            // resolved openclaw CLI path (only used when Provider == "openclaw"); empty = look up on PATH
+	Task           TaskContextForEnv // context data for writing files
 }
 
 // TaskContextForEnv is the subset of task context used for writing context files.
@@ -182,7 +175,7 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion}, logger); err != nil {
 			return nil, fmt.Errorf("execenv: prepare codex-home: %w", err)
 		}
-		if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, params.SkillsLocal, logger); err != nil {
+		if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, logger); err != nil {
 			return nil, fmt.Errorf("execenv: hydrate codex skills: %w", err)
 		}
 		env.CodexHome = codexHome
@@ -213,14 +206,9 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 type ReuseParams struct {
 	WorkDir      string
 	Provider     string
-	CodexVersion string // only used when Provider == "codex"
-	OpenclawBin  string // only used when Provider == "openclaw"; empty = PATH lookup
-	// SkillsLocal mirrors PrepareParams.SkillsLocal. Reuse must respect
-	// the same gate so a workdir resurrected on a later task picks up the
-	// current agent setting (the user may have flipped the toggle between
-	// runs).
-	SkillsLocal string
-	Task        TaskContextForEnv // refreshed context files / skills
+	CodexVersion string            // only used when Provider == "codex"
+	OpenclawBin  string            // only used when Provider == "openclaw"; empty = PATH lookup
+	Task         TaskContextForEnv // refreshed context files / skills
 }
 
 // Reuse wraps an existing workdir into an Environment and refreshes context files.
@@ -250,7 +238,7 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 			logger.Warn("execenv: refresh codex-home failed", "error", err)
 		} else {
 			env.CodexHome = codexHome
-			if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, params.SkillsLocal, logger); err != nil {
+			if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, logger); err != nil {
 				logger.Warn("execenv: refresh codex skills failed", "error", err)
 			}
 		}
@@ -291,26 +279,17 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 //     run — its old contents would otherwise remain visible to the codex
 //     CLI.
 //
-// When skillsLocal == "ignore" the user-skill seed is skipped, so the
-// per-task CODEX_HOME exposes only workspace skills to the codex CLI. This
-// is the Codex-side enforcement of the per-agent `skills_local` toggle —
-// the Claude backend enforces the same contract by mirroring `~/.claude/`
-// minus `skills/` (see server/pkg/agent/claude.go).
-//
-// Codex is the only runtime besides Claude where the daemon actively
-// manages user-skill discovery: Codex via CODEX_HOME and the seed step
-// here, Claude via CLAUDE_CONFIG_DIR scratch mirroring. Other runtimes
-// leave HOME untouched and discover user-level skills natively (see
-// context.go for the workdir-local paths they use for workspace skills),
-// so `skills_local` is a no-op for them today.
-func hydrateCodexSkills(codexHome string, workspaceSkills []SkillContextForEnv, skillsLocal string, logger *slog.Logger) error {
+// Codex is the only runtime that needs this two-stage hydration because the
+// daemon sets CODEX_HOME to a per-task directory, isolating the CLI from the
+// user's real ~/.codex/. Other runtimes leave HOME untouched and discover
+// user-level skills natively (see context.go for the workdir-local paths
+// they use for workspace skills).
+func hydrateCodexSkills(codexHome string, workspaceSkills []SkillContextForEnv, logger *slog.Logger) error {
 	skillsDir := filepath.Join(codexHome, "skills")
 	if err := os.RemoveAll(skillsDir); err != nil {
 		return fmt.Errorf("clear codex skills dir: %w", err)
 	}
-	if skillsLocal == "ignore" {
-		logger.Info("execenv: codex user-skill seed skipped (skills_local=ignore)")
-	} else if err := seedUserCodexSkills(codexHome, workspaceSkills, logger); err != nil {
+	if err := seedUserCodexSkills(codexHome, workspaceSkills, logger); err != nil {
 		logger.Warn("execenv: seed user codex skills failed", "error", err)
 	}
 	if len(workspaceSkills) == 0 {
