@@ -208,7 +208,7 @@ func createHandlerTestAgent(t *testing.T, name string, mcpConfig []byte) string 
 	return agentID
 }
 
-// createHandlerTestTaskForAgent seeds a queued agent_task_queue row for the
+// createHandlerTestTaskForAgent seeds a running agent_task_queue row for the
 // given agent (with no associated issue) and returns the task UUID. Used by
 // tests that need to set X-Task-ID alongside X-Agent-ID — resolveActor now
 // requires the pair to be present and consistent before granting "agent"
@@ -217,11 +217,18 @@ func createHandlerTestTaskForAgent(t *testing.T, agentID string) string {
 	return createHandlerTestTaskForAgentOnIssue(t, agentID, "")
 }
 
-// createHandlerTestTaskForAgentOnIssue seeds a queued agent_task_queue row
+// createHandlerTestTaskForAgentOnIssue seeds a running agent_task_queue row
 // for the given agent, optionally bound to an issue (pass "" to leave
 // issue_id NULL). The bound-issue form is needed by the self-loop guard
 // test, which compares the calling task's issue_id against the promoted
 // issue — only a same-issue match counts as a true self-loop.
+//
+// Status is 'running' because X-Task-ID is something a currently-executing
+// task sends. Using 'running' also keeps the seed outside the
+// idx_one_pending_task_per_issue_agent unique index (queued/dispatched only)
+// and outside callers' `status='queued'` count assertions, so tests can
+// assert that the handler did or did not enqueue a NEW task without
+// double-counting the seed.
 func createHandlerTestTaskForAgentOnIssue(t *testing.T, agentID, issueID string) string {
 	t.Helper()
 
@@ -234,8 +241,8 @@ func createHandlerTestTaskForAgentOnIssue(t *testing.T, agentID, issueID string)
 
 	var taskID string
 	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id)
-		VALUES ($1, $2, 'queued', 0, $3)
+		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, started_at)
+		VALUES ($1, $2, 'running', 0, $3, now())
 		RETURNING id
 	`, agentID, handlerTestRuntimeID(t), issueArg).Scan(&taskID); err != nil {
 		t.Fatalf("failed to create handler test task: %v", err)
