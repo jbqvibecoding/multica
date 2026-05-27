@@ -20,17 +20,52 @@
  * Why not clipboardTextParser? It only runs when there's NO text/html on
  * the clipboard (ProseMirror source: `let asText = !!text && !html`).
  *
- * Why not heuristic detection (looksLikeMarkdown / hasRichHtml)? Unreliable.
- * VS Code's HTML contains <code> tags that fool rich-content detectors.
- * Markdown pattern matching has too many edge cases. Instead, the classifier
- * only keeps narrow deterministic exits for editor-owned slices, code block
- * context, structured plain text, and large payloads.
+ * HTML/text classification is intentionally conservative. Rich semantic HTML
+ * should stay native so links, lists, emphasis, and inline code survive.
+ * Syntax-highlight wrappers from editors (<pre>/<code>/<span>/<div>) are not
+ * enough by themselves, because those should still paste as Markdown source.
  */
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Slice } from "@tiptap/pm/model";
 
 const LARGE_PASTE_TEXT_THRESHOLD = 50_000;
+const SEMANTIC_RICH_HTML_SELECTOR = [
+  "a[href]",
+  "b",
+  "blockquote",
+  "del",
+  "details",
+  "em",
+  "figcaption",
+  "figure",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "hr",
+  "i",
+  "img",
+  "li",
+  "mark",
+  "ol",
+  "s",
+  "strong",
+  "sub",
+  "summary",
+  "sup",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "u",
+  "ul",
+].join(",");
 
 // CommonMark treats <word> as raw HTML regardless of whether "word" is a real
 // HTML element. For plain-text paste, the user's text is the source of truth, so
@@ -149,6 +184,39 @@ function isStructuredPlainText(text: string): boolean {
   return isJsonDocumentText(text);
 }
 
+function hasRichStyle(style: string): boolean {
+  const normalized = style.toLowerCase();
+  return (
+    /font-weight\s*:\s*(bold|[6-9]00)\b/.test(normalized) ||
+    /font-style\s*:\s*italic\b/.test(normalized) ||
+    /text-decoration[^;]*(line-through|underline)/.test(normalized)
+  );
+}
+
+function hasSemanticRichHtml(html: string): boolean {
+  if (!html.trim()) return false;
+  if (typeof DOMParser === "undefined") return false;
+
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const { body } = doc;
+  if (!body) return false;
+
+  if (body.querySelector(SEMANTIC_RICH_HTML_SELECTOR)) return true;
+
+  // Inline <code> carries meaningful rich-text semantics. A <pre><code> pair
+  // alone is often just a syntax-highlight wrapper from editors, so keep that
+  // path available for Markdown parsing.
+  for (const code of Array.from(body.querySelectorAll("code"))) {
+    if (!code.closest("pre")) return true;
+  }
+
+  for (const el of Array.from(body.querySelectorAll<HTMLElement>("[style]"))) {
+    if (hasRichStyle(el.getAttribute("style") ?? "")) return true;
+  }
+
+  return false;
+}
+
 function classifyPaste({
   text,
   html,
@@ -159,6 +227,7 @@ function classifyPaste({
   if (!text) return "native";
   if (isInsideCodeBlock) return "literal";
   if (html && html.includes("data-pm-slice")) return "native";
+  if (html && hasSemanticRichHtml(html)) return "native";
   if (text.length > LARGE_PASTE_TEXT_THRESHOLD) return "literal";
   if (isStructuredPlainText(text)) return "literal";
   return "markdown";

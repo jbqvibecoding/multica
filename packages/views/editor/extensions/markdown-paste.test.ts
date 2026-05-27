@@ -144,6 +144,65 @@ describe("markdownPaste — code block context", () => {
     expect(types).toContain("heading");
   });
 
+  it("lets semantic rich HTML paste natively instead of reparsing plain text as Markdown", () => {
+    editor = makeEditor({
+      type: "doc",
+      content: [{ type: "paragraph" }],
+    });
+
+    editor.commands.setTextSelection(1);
+    const parseSpy = vi.spyOn(editor.markdown!, "parse");
+
+    const text =
+      "viewFiltersToApiParams(filters) maps to Partial<ListIssuesParams>.";
+    const html =
+      "<p><code>viewFiltersToApiParams(filters)</code> maps to " +
+      "<code>Partial&lt;ListIssuesParams&gt;</code>.</p>";
+
+    const handled = paste(editor, text, html);
+    expect(handled).toBe(false);
+    expect(parseSpy).not.toHaveBeenCalled();
+  });
+
+  it("lets list and emphasis HTML paste natively", () => {
+    editor = makeEditor({
+      type: "doc",
+      content: [{ type: "paragraph" }],
+    });
+
+    editor.commands.setTextSelection(1);
+    const parseSpy = vi.spyOn(editor.markdown!, "parse");
+
+    const handled = paste(
+      editor,
+      "Done\nCreated filters.ts",
+      "<ul><li><strong>Done</strong></li><li>Created filters.ts</li></ul>",
+    );
+
+    expect(handled).toBe(false);
+    expect(parseSpy).not.toHaveBeenCalled();
+  });
+
+  it("still parses Markdown when HTML is only a syntax-highlight wrapper", () => {
+    editor = makeEditor({
+      type: "doc",
+      content: [{ type: "paragraph" }],
+    });
+
+    editor.commands.setTextSelection(1);
+
+    const handled = paste(
+      editor,
+      "# Heading\n\nbody",
+      '<pre><code><span style="color: #888"># Heading</span><br><br>body</code></pre>',
+    );
+
+    expect(handled).toBe(true);
+    const json = editor.getJSON() as JsonNode;
+    const types = (json.content ?? []).map((n) => n.type);
+    expect(types).toContain("heading");
+  });
+
   it("inserts JSON clipboard text without running the Markdown parser", () => {
     editor = makeEditor({
       type: "doc",
